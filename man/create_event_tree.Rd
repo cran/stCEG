@@ -4,46 +4,54 @@
 \alias{create_event_tree}
 \title{Create an Event Tree from a Dataset}
 \usage{
-create_event_tree(
-  dataset,
-  columns = seq_along(dataset),
-  label_type = "both",
-  level_separation = 1000,
-  node_distance = 300
-)
+create_event_tree(dataset, columns = seq_along(dataset))
 }
 \arguments{
 \item{dataset}{A data frame containing categorical variables.}
 
-\item{columns}{A vector of column indices or names specifying which variables to use for constructing the event tree.}
-
-\item{label_type}{A character string specifying how edge labels should be displayed. Options are \code{"names"} (variable names),
-\code{"both"} (variable names and counts). Default is \code{"both"}.}
-
-\item{level_separation}{A numeric value indicating the spacing between levels in the visualization. Default is \code{1000}.}
-
-\item{node_distance}{A numeric value specifying the horizontal distance between nodes in the visualization. Default is \code{300}.}
+\item{columns}{A vector of column names or column indices specifying which
+variables should be used to construct the event tree. Defaults to all
+columns in the dataset.}
 }
 \value{
-A \code{visNetwork} object displaying the event tree.
+An object of class \code{"event_tree"} containing:
+\itemize{
+\item \code{nodes}: node information for the event tree.
+\item \code{edges}: edge information and frequencies.
+\item \code{data}: the filtered dataset used to construct the tree.
+\item \code{variables}: variables used in the tree.
+\item \code{n_nodes}: total number of nodes.
+\item \code{n_edges}: total number of edges.
+}
 }
 \description{
-This function constructs an event tree from a given dataset based on user-specified categorical variables.
-The resulting tree is represented as a graph, where each unique combination of variable values corresponds
-to a distinct path in the tree.
+Constructs an event tree from a categorical dataset. Each unique path
+through the selected variables is represented as a sequence of situations
+and edges, with edge counts corresponding to observed frequencies in the
+data.
 }
 \details{
-The function follows these steps:
+The resulting object can be visualised using \code{plot()} and inspected
+using \code{print()} and \code{summary()}.
+
+The function:
 \enumerate{
-\item Extracts the specified columns from the dataset.
-\item Determines unique values for each variable and generates state names dynamically.
-\item Constructs a directed acyclic graph (DAG) using \code{igraph}, where each state represents a unique combination of variable values.
-\item Computes transition counts between states.
-\item Uses \code{visNetwork} to generate an interactive visualization of the event tree.
+\item Constructs a rooted event tree from the selected variables.
+\item Creates one edge for each possible transition between levels.
+\item Calculates frequencies for all observed and unobserved paths.
+\item Stores node and edge information in a format suitable for
+visualisation with \pkg{visNetwork}.
 }
 }
 \examples{
-data <- homicides
-event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-event_tree
+
+et <- create_event_tree(homicides, c(1:3))
+
+print(et)
+summary(et)
+
+}
+\seealso{
+\code{\link{plot.event_tree}},
+\code{\link{summary.event_tree}}
 }

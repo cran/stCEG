@@ -1,78 +1,151 @@
-#' Agglomerative Hierarchical Clustering (AHC) Colouring for Event Trees
+#' Apply Agglomerative Hierarchical Clustering (AHC) Stage Colouring
 #'
-#' This function applies Agglomerative Hierarchical Clustering (AHC) to colour the nodes of an event tree, taking into account their outgoing edges and stage information. It returns a coloured event tree based on the computed priors.
+#' Applies an Agglomerative Hierarchical Clustering (AHC) stage-merging
+#' algorithm to an event tree or staged tree. The algorithm groups situations
+#' with equivalent floret structures and iteratively merges stages according to
+#' a Bayesian scoring criterion based on Dirichlet-Multinomial likelihoods.
 #'
-#' @param event_tree_obj A list containing an event tree or staged tree, and other relevant data for the event tree processing.
-#' @param level_separation Numeric value defining the level separation between nodes in the event tree (default is 1000).
-#' @param node_distance Numeric value defining the distance between nodes (default is 300).
+#' Nodes assigned to the same stage are coloured identically, and the resulting
+#' stage allocation is returned as a \code{"staged_tree"} object suitable for
+#' further analysis, visualisation, or CEG construction.
 #'
-#' @return A `visNetwork` object representing the staged tree.
+#' The algorithm only considers non-terminal situations when forming stages.
+#' Root and sink nodes are always assigned the default white colour and are not
+#' included in stage merging.
+#'
+#' @param event_tree_obj An object of class \code{"event_tree"} or
+#'   \code{"staged_tree"} containing node and edge information together with
+#'   the underlying dataset stored in \code{$data}.
+#'
+#' @param level_separation Numeric value controlling the separation between
+#'   levels when plotting the resulting staged tree. Included for compatibility
+#'   with staged tree visualisation methods. Default is \code{1000}.
+#'
+#' @param node_distance Numeric value controlling the spacing between nodes when
+#'   plotting the resulting staged tree. Included for compatibility with staged
+#'   tree visualisation methods. Default is \code{300}.
 #'
 #' @details
-#' This function processes an event tree or partial staged tree, calculates priors based on the outgoing edges from each node, and performs Agglomerative Hierarchical Clustering (AHC) to colour the nodes of the event tree. It returns a `visNetwork` object that can be visualized as a coloured event tree. The function also computes the likelihood and scores based on merging stages in the event tree.
+#' The procedure:
+#' \enumerate{
+#'   \item Extracts node, edge, and dataset information from the supplied
+#'   event tree or staged tree object.
+#'   \item Identifies comparable situations based on their level and outgoing
+#'   edge labels.
+#'   \item Constructs Dirichlet prior vectors and floret count vectors for each
+#'   situation.
+#'   \item Iteratively merges candidate stages whenever doing so increases the
+#'   Bayesian score.
+#'   \item Assigns a unique colour to each resulting stage using the
+#'   \pkg{randomcoloR} package.
+#'   \item Returns a new \code{"staged_tree"} object containing the updated
+#'   stage colouring.
+#' }
 #'
+#' A consistency check is performed before returning the staged tree to ensure
+#' that nodes sharing the same stage colour have identical outgoing edge
+#' structures. An error is raised if such conflicts are detected.
+#'
+#' @return
+#' An object of class \code{"staged_tree"} containing:
+#' \itemize{
+#'   \item Updated node colours representing the inferred stage structure.
+#'   \item Original edge information.
+#'   \item The underlying dataset.
+#'   \item Node-level method annotations identifying stages generated using
+#'   the AHC procedure.
+#' }
 #'
 #' @examples
-#' data <- homicides
-#' event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-#' event_tree
-#' coloured_tree <- ahc_colouring(event_tree)
-#' coloured_tree
+#' et <- create_event_tree(homicides, c(1:3))
+#'
+#' st <- ahc_colouring(et)
+#'
+#' print(st)
+#' summary(st)
+#' plot(st)
+#'
+#'
+#' @seealso
+#' \code{\link{create_staged_tree}},
+#' \code{\link{plot.staged_tree}},
+#' \code{\link{summary.staged_tree}}
 #'
 #' @export
-ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance = 300) {
+ahc_colouring <- function(event_tree_obj,
+                          level_separation = 1000,
+                          node_distance = 300) {
 
   if (!requireNamespace("randomcoloR", quietly = TRUE)) {
-    stop("Package 'randomcoloR' needed for this function to work. Please install it.", call. = FALSE)
+    stop("Package 'randomcoloR' needed for this function to work. Please install it.",
+         call. = FALSE)
   }
 
-  exampledata <- event_tree_obj$filtereddf
+  # Correct S3 extraction
+  if (inherits(event_tree_obj, "event_tree")) {
+    nodes <- dplyr::as_tibble(event_tree_obj$nodes)
+    edges <- dplyr::as_tibble(event_tree_obj$edges)
+    filtereddf <- event_tree_obj$data
 
-# Setting error if incorrect format
-  if (!is.null(event_tree_obj$eventtree)) {
-    tree <- event_tree_obj$eventtree
-  } else if (!is.null(event_tree_obj$stagedtree)) {
-    tree <- event_tree_obj$stagedtree
+  } else if (inherits(event_tree_obj, "staged_tree")) {
+    nodes <- dplyr::as_tibble(event_tree_obj$nodes)
+    edges <- dplyr::as_tibble(event_tree_obj$edges)
+    filtereddf <- event_tree_obj$data
+
   } else {
-    stop("Neither eventtree nor stagedtree exists")
+    stop("Input must be an event_tree or staged_tree object.")
   }
 
-  # Extract nodes and edges
-  nodes <- tree$x$nodes
-  edges <- tree$x$edges
+  #nodes$method <- NA_character_
 
-  # Get unique levels from nodes
+  # Levels and nodes to consider (exclude root and terminal level)
   unique_levels <- unique(nodes$level)
-
-  # Define levels to filter out (maximum level)
   levels_to_exclude <- max(unique_levels)
-
-  # Filter out nodes at level 1 or max level
   nodes_to_consider <- nodes[!(nodes$level %in% levels_to_exclude), ]
-
   nodes_to_consider$id2 <- 1:nrow(nodes_to_consider)
   nodes_to_consider2 <- nodes_to_consider$id
 
+  # Edge summaries
   edges_to_consider <- edges %>%
-    group_by(from) %>%
-    summarize(
+    dplyr::group_by(from) %>%
+    dplyr::summarize(
       label2_list = paste(label2, collapse = ", ")
     )
+
+
   label_matching <- edges %>%
-    group_by(from) %>%
-    summarize(
+    dplyr::group_by(from) %>%
+    dplyr::summarize(
       label_list = paste(label1, collapse = ", ")
     )
 
-  # Count outgoing edges for each 'from' node
-  outgoing_edges <- edges %>%
-    count(from, name = "outgoing_edges")
-  edges_to_consider <- inner_join(edges_to_consider, label_matching, by = join_by(from == from))
-  nodes_to_consider <- inner_join(nodes_to_consider, outgoing_edges, by = join_by(id == from), keep = FALSE)
-  nodes_to_consider <- inner_join(nodes_to_consider, edges_to_consider, by = join_by(id == from), keep = FALSE)
+  if (!"outgoing_edges" %in% colnames(nodes)) {
+    outgoing_edges <- dplyr::count(edges, from, name = "outgoing_edges")
+    nodes_to_consider <- dplyr::inner_join(
+      nodes_to_consider,
+      outgoing_edges,
+      by = c("id" = "from"),
+      keep = FALSE
+    )
+  } else {
 
-  # Add the outgoing edges information as a new column in the nodes dataframe
+  }
 
+
+  edges_to_consider <- dplyr::inner_join(
+    edges_to_consider,
+    label_matching,
+    by = "from"
+  )
+
+  nodes_to_consider <- dplyr::inner_join(
+    nodes_to_consider,
+    edges_to_consider,
+    by = c("id" = "from"),
+    keep = FALSE
+  )
+
+  # Helper: convert label2_list string to numeric matrix
   convert_to_matrix <- function(label2_list_str) {
     # Split the string into a numeric vector
     num_vec <- as.numeric(unlist(strsplit(label2_list_str, ", ")))
@@ -89,59 +162,41 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
     }
   }
 
-  # Apply the conversion function to the 'label2_list' column
-
-  # Ensure all columns are factors
-  exampledata[] <- lapply(exampledata, function(x) {
+  # Ensure all columns in filtereddf are factors
+  filtereddf[] <- lapply(filtereddf, function(x) {
     if (!is.factor(x)) as.factor(x) else x
   })
-  #print("exampledata")
-  #print(exampledata)
 
+  numbvariables <- ncol(filtereddf)
+  numbcat <- sapply(filtereddf, nlevels)
 
-
-  # Calculate number of variables
-  numbvariables <- ncol(exampledata)
-  #print("numvars:")
-  #print(numbvariables)
-
-  # Calculate number of categories for each column
-  numbcat <- sapply(exampledata, nlevels)
-  #print("numcat:")
-  #print(as.vector(numbcat))
-
-  # Determine the size of the largest category
   equivsize <- max(nodes_to_consider$outgoing_edges)
-  #print("equivsize:")
-  #print(equivsize)
 
-  # Calculate the number of combinations
   numb <- numeric(numbvariables)
-  numb[1] <- 1  # The number of combinations for 1 variable is 1
+  numb[1] <- 1
 
   for (i in 2:numbvariables) {
-    numb[i] <- prod(numbcat[1:(i-1)])
+    numb[i] <- prod(numbcat[1:(i - 1)])
   }
 
-
   nodes_to_consider$prior <- 0
-
-  # Set the prior for the first row to equivsize
   nodes_to_consider$prior[1] <- equivsize
+
+  prior <- vector("list", nrow(nodes_to_consider))
+
   prior<-c()
+
   for (i in 1:nrow(nodes_to_consider)) {
 
     # Get the current row's 'id' from nodes_to_consider
     current_id <- nodes_to_consider$id[i]
-    #print(current_id)
     # Step 1: Get the number of outgoing edges for this node (this could be a count of edges with 'from' = current_id)
     outgoing_edges <- nodes_to_consider$outgoing_edges[i]
-    #print(outgoing_edges)
 
     # Step 2: Calculate the new prior (divide current prior by the number of outgoing edges)
     current_prior <- nodes_to_consider$prior[i]  # Assuming prior column exists
     new_prior <- current_prior / outgoing_edges
-    #print(new_prior)
+
 
     # Step 3: Update the 'prior' for rows in edges where 'from' equals the current 'id'
     # and update the corresponding 'prior' in nodes_to_consider based on 'to'
@@ -155,46 +210,28 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
   }
 
 
-  #Datalist1: list of the number of individuals going from the stage along a particular edge in C_{0}
-  data <- lapply(nodes_to_consider$label2_list, convert_to_matrix)
-  # Print the resulting list of matrices
-  # print("data")
-  # print(data)
 
-  #List of the stages that can be merged in the first step
-  comparisonset <- nodes_to_consider %>%
-    group_by(level2, label_list) %>%
-    summarise(node_ids = list(id2), .groups = "keep") %>%
-    pull(node_ids)  # Extract the list of node IDs
+  data_list <- lapply(nodes_to_consider$label2_list, convert_to_matrix)
 
-  # Print the resulting list of vectors
-  # print(comparisonset)
-  # print("end of comparisonset")
-  # Initialize labelling as an empty matrix with 0 rows and columns
 
-  # Print the levels of the factor
-  #print(levels(column_vector))
-  # Extract and sort levels
-  #sorted_levels <- sort(levels(factor_levels))
+  comparisonset <- nodes_to_consider %>% dplyr::group_by(level2, label_list)
+  comparisonset <- dplyr::summarise(
+    comparisonset,
+    node_ids = list(id2),
+    .groups = "keep"
+  )
+  comparisonset <- comparisonset$node_ids
 
-  # Print sorted levels
-  #print(sorted_levels)
-
-  #print(sorted_levels)
-  # Initialize labelling matrix
   labelling <-c()
   labelling <- NULL
 
   for (k in 1:(numbvariables - 1)) {
     # Alphabetically sort the levels of the current variable
-    sorted_levels <- sort(levels(factor(exampledata[[k]])))
-    #print("sorted levels")
-    #print(sorted_levels)
+    sorted_levels <- sort(levels(factor(filtereddf[[k]])))
 
     # Create the initial label with "NA" and appropriate repetitions
     label <- c("NA", rep("NA", sum(numb[1:k]) - 1))
     label <- c(label, rep(sorted_levels, numb[k]))
-    #print(label)
 
     # If not the last variable, continue adding labels for subsequent variables
     if (k < (numbvariables - 1)) {
@@ -215,23 +252,20 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
   # Combine the sequence with the `labelling` matrix
   # Use `matrix` to ensure the row numbers are a column vector with correct dimensions
   labelling <- cbind(labelling, row_numbers)
-  #print("labelling")
-  #print(labelling)
+
 
   mergedlist <-c()
   for (i in 1:nrow(nodes_to_consider)){
     mergedlist<-c(mergedlist,list(labelling[i,]))
   }
-  #print("mergedlist")
-  #print(mergedlist)
+
   merged1<-c()
   lik <-0
   for( i in 1: nrow(nodes_to_consider)){
     alpha<-unlist(prior[i])
-    #print("alpha")
-    #print(alpha)
-    N<-unlist(data[i])
-    #print(N)
+
+    N<-unlist(data_list[i])
+
     lik<-lik+sum(lgamma(alpha+N)-lgamma(alpha))+sum(lgamma(sum(alpha))-lgamma(sum(alpha+N)))
   }
   score<-c(lik)
@@ -250,12 +284,12 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
             compare1<-comparisonset[[k]][i]
             compare2<-comparisonset[[k]][j]
             #we calculate the difference between the CEG where two stages are merged
-            result<-lgamma(sum(prior[[compare1]]+prior[[compare2]]))-lgamma(sum(prior[[ compare1]]+data[[compare1]]+prior[[compare2]]+data[[compare2]]))+
-              sum(lgamma(prior[[compare1]]+data[[compare1]]+prior[[compare2]]+data[[ compare2]]))-sum(lgamma(prior[[compare1]]+prior[[compare2]]))-
+            result<-lgamma(sum(prior[[compare1]]+prior[[compare2]]))-lgamma(sum(prior[[ compare1]]+data_list[[compare1]]+prior[[compare2]]+data_list[[compare2]]))+
+              sum(lgamma(prior[[compare1]]+data_list[[compare1]]+prior[[compare2]]+data_list[[ compare2]]))-sum(lgamma(prior[[compare1]]+prior[[compare2]]))-
               #and the CEG where the two stages are not merged
-              (lgamma(sum(prior[[compare1]]))-lgamma(sum(prior[[compare1]]+data[[compare1 ]]))+sum(lgamma(prior[[compare1]]+data[[compare1]]))-
-                 sum(lgamma(prior[[compare1]]))+lgamma(sum(prior[[compare2]]))-lgamma(sum( prior[[compare2]]+data[[compare2]]))+
-                 sum(lgamma(prior[[compare2]]+data[[compare2]]))-sum(lgamma(prior[[compare2]])))
+              (lgamma(sum(prior[[compare1]]))-lgamma(sum(prior[[compare1]]+data_list[[compare1 ]]))+sum(lgamma(prior[[compare1]]+data_list[[compare1]]))-
+                 sum(lgamma(prior[[compare1]]))+lgamma(sum(prior[[compare2]]))-lgamma(sum( prior[[compare2]]+data_list[[compare2]]))+
+                 sum(lgamma(prior[[compare2]]+data_list[[compare2]]))-sum(lgamma(prior[[compare2]])))
             #if the resulting difference is greater than the current difference then we replace it
             if (result > difference){
               difference<-result
@@ -270,8 +304,8 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
     if(diff.end >0){
       prior[[merged[1]]]<-prior[[merged[1]]]+prior[[merged[2]]]
       prior[[merged[2]]]<-cbind(NA,NA)
-      data[[merged[1]]]<-data[[merged[1]]]+data[[merged[2]]]
-      data[[merged[2]]]<-cbind(NA,NA)
+      data_list[[merged[1]]]<-data_list[[merged[1]]]+data_list[[merged[2]]]
+      data_list[[merged[2]]]<-cbind(NA,NA)
       comparisonset[[merged[3]]]<-comparisonset[[merged[3]]][-(which(comparisonset[[merged[3]]]==merged[2]))]
       mergedlist[[merged[1]]]<-cbind(mergedlist[[merged[1]]],mergedlist[[merged[2]]])
       mergedlist[[merged[2]]]<-cbind(NA,NA)
@@ -286,7 +320,7 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
     stages<-c(stages,comparisonset[[i-1]])
   }
   result<-mergedlist[stages]
-  newlist<-list(prior=prior,data=data,stages=stages,result=result,score=score,merged=merged1 ,comparisonset=comparisonset ,mergedlist=mergedlist ,lik=lik)
+  newlist<-list(prior=prior,data_list=data_list,stages=stages,result=result,score=score,merged=merged1 ,comparisonset=comparisonset ,mergedlist=mergedlist ,lik=lik)
   mergedlist
   row_numbers_list <- list()
 
@@ -334,25 +368,18 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
   # Flatten the nested lists into simple vectors and print them
   flattened_list <- lapply(row_numbers_list, function(x) unlist(x))
   included_ids <- unlist(flattened_list)
-  #print(flattened_list)
-  #print(included_ids)
-  #print("rownumbers")
-  #print(row_numbers)
+
 
   # Identify missing IDs
   missing_ids <- setdiff(nodes_to_consider2, included_ids)
-  #print("missing:")
-  #print(missing_ids)
 
   # Add each missing ID as an individual sublist to flattened_list
   for (row_number in missing_ids) {
     flattened_list <- append(flattened_list, list(row_number))
   }
 
-  # Print the updated flattened_list
-  #print(flattened_list)
-
   num_colours <- length(flattened_list) # Number of groups
+
   colors <- randomcoloR::distinctColorPalette(num_colours)
 
   # Update the nodes dataframe with these colours
@@ -364,40 +391,59 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
     #nodes$colour <- "#ffffff"
     nodes[nodes$id %in% group & nodes$color == "#FFFFFF", "color"] <- color
   }
+
   nodes$color[nodes$level == 1] <- "#FFFFFF"
   nodes$color[nodes$level == levels_to_exclude] <- "#FFFFFF"
   nodes$number <- 1
+  if (!"method" %in% colnames(nodes)) {
+    nodes$method <- NA_character_
+  }
+
+  nodes <- dplyr::as_tibble(nodes)
 
   # Create a dataframe of outgoing edge labels for each node
   outgoing_edges_labels <- edges %>%
-    group_by(from) %>%
-    summarize(
+    dplyr::group_by(from) %>%
+    dplyr::summarize(
       outgoing_labels = paste(sort(unique(label1)), collapse = ","),
-      outgoing_edges2 = n(),
+      outgoing_edges2 = dplyr::n(),
       .groups = "drop"
     )
 
+
   # Check if outgoing_labels and outgoing_edges2 exist in nodes
   if (!("outgoing_labels" %in% colnames(nodes))) {
-    nodes <- left_join(nodes, outgoing_edges_labels, by = c("id" = "from"))
-  } else {
+    nodes <- dplyr::left_join(nodes, outgoing_edges_labels, by = c("id" = "from"))
+  } else if (("outgoing_labels.y" %in% colnames(nodes))){
     # Only update missing values
-    nodes <- nodes %>%
-      left_join(outgoing_edges_labels, by = c("id" = "from")) %>%
-      mutate(
-        outgoing_labels = ifelse(is.na(outgoing_labels.x), outgoing_labels.y, outgoing_labels.x),
-        outgoing_edges2 = ifelse(is.na(outgoing_edges2.x), outgoing_edges2.y, outgoing_edges2.x)
+    nodes <- dplyr::left_join(nodes, outgoing_edges_labels, by = c("id" = "from")) %>%
+      dplyr::mutate(
+        outgoing_labels = dplyr::coalesce(
+          outgoing_labels,
+          outgoing_labels.x,
+          outgoing_labels.y
+        ),
+        outgoing_edges2 = dplyr::coalesce(
+          outgoing_edges2,
+          outgoing_edges2.x,
+          outgoing_edges2.y
+        )
       ) %>%
-      select(-outgoing_labels.y, -outgoing_labels.x, -outgoing_edges2.y, -outgoing_edges2.x)
+      dplyr::select(
+        -dplyr::matches("\\.x$"),
+        -dplyr::matches("\\.y$")
+      )
+
   }
 
-  # Merge outgoing edge labels with nodes data
+  #nodes <- dplyr::as_tibble(nodes)
+
   # Check for conflicts: Nodes with the same colour but different outgoing edge labels
   conflicting_nodes <- nodes %>%
-    filter(color != "#FFFFFF") %>%  # Ignore white-coloured nodes
-    group_by(color) %>%
-    filter(n_distinct(outgoing_labels) > 1) %>%
-    pull(id) %>%
+    dplyr::filter(color != "#FFFFFF") %>%  # Ignore white-coloured nodes
+    dplyr::group_by(color) %>%
+    dplyr::filter(dplyr::n_distinct(outgoing_labels) > 1) %>%
+    dplyr::pull(id) %>%
     unique()
 
   # Raise an error if any conflicts exist
@@ -406,50 +452,20 @@ ahc_colouring <- function(event_tree_obj, level_separation = 1000, node_distance
                paste(conflicting_nodes, collapse = ", ")))
   }
 
-  # Save updated nodes & edges to environment
-  #stagedtreedf <- list(nodes = nodes, edges = edges)
-  #assign("stagedtreedf", stagedtreedf, envir = .GlobalEnv)
-
-  # Ensure nodes are movable in Y direction but fixed in X
-  nodes <- nodes %>%
-    mutate(fixed = list(list(x = TRUE, y = FALSE)))
-
-  # Return the updated visNetwork plot
-  network_plot <- visNetwork(nodes = nodes, edges = edges) %>%
-    visHierarchicalLayout(direction = "LR", levelSeparation = level_separation) %>%
-    visNodes(scaling = list(min = 10, max = 10), font = list(vadjust = -170), fixed = TRUE) %>%
-    visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 5))) %>%
-    visOptions(
-      manipulation = list(
-        enabled = FALSE,
-        addEdgeCols = FALSE,
-        addNodeCols = FALSE,
-        editEdgeCols = FALSE,
-        editNodeCols = c("color"),
-        multiselect = TRUE
-      ),
-      nodesIdSelection = FALSE
-    ) %>%
-    visInteraction(
-      dragNodes = TRUE,
-      multiselect = TRUE,
-      navigationButtons = TRUE
-    ) %>%
-    visPhysics(hierarchicalRepulsion = list(nodeDistance = node_distance), stabilization = TRUE) %>%
-    visEvents(
-      selectNode = "function(params) { /* Node selection code */ }",
-      deselectNode = "function(params) { /* Deselect code */ }"
-    ) %>%
-    visEvents(stabilizationIterationsDone = "function() { this.physics.options.enabled = false; }")
-
-  # Create the result list (with invisible filtereddf)
-  result <- invisible(exampledata)
+  # Tag method at node level
+  nodes$method[
+    is.na(nodes$method) &
+      nodes$color != "#FFFFFF"
+  ] <- "ahc"
 
 
-  # Return both the network plot and the result
-  output <- list(stagedtree = network_plot, filtereddf = result)
+  # Build staged_tree object
+  staged_tree <- create_staged_tree(
+    nodes      = nodes,
+    edges      = edges,
+    filtereddf = filtereddf,
+    method     = "ahc"
+  )
 
-  class(output) <- "staged_tree"
-  return(output)
-
+  return(staged_tree)
 }

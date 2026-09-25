@@ -2,41 +2,58 @@
 % Please edit documentation in R/run_stceg.R
 \name{run_stceg}
 \alias{run_stceg}
-\title{Run the stCEG Shiny App}
+\title{Launch the stCEG Shiny Application}
 \usage{
 run_stceg()
 }
 \value{
-The function launches a Shiny app for spatial data analysis with interactive
-visualizations and data manipulation features.
+Launches a Shiny application and returns a
+\code{\link[shiny]{shinyApp}} object.
 }
 \description{
-The app facilitates the upload and processing of spatial data, including the
-dynamic selection of area divisions, time divisions, and prediction variables.
-It integrates the leaflet package for interactive maps and visNetwork for visualizing
-event trees. Additionally, the app supports the use of agglomerative hierarchical clustering (AHC)
-Run the stCEG Shiny App
-
-This function launches a Shiny app that allows users to upload spatial data
-(in the form of a shapefile) and visualize it using Chain Event Graphs (CEGs).
-The app enables the user to apply various spatial and temporal analyses,
-including map visualizations and event tree colourings.
-
-The app facilitates the upload and processing of spatial data, including the
-dynamic selection of area divisions, time divisions, and prediction variables.
-It integrates the leaflet package for interactive maps and visNetwork for visualizing
-event trees. Additionally, the app supports the use of agglomerative hierarchical clustering (AHC)
-for node colouring in event trees and allows for specification of prior distributions.
+Launches the interactive stCEG Shiny application for constructing,
+visualising and analysing Event Trees, Staged Trees and Chain Event Graphs
+(CEGs), including spatial visualisation through interactive maps.
 }
 \details{
-This function launches a Shiny app that allows users to upload spatial data
-(in the form of a shapefile) and visualize it using Chain Event Graphs (CEGs).
-The app enables the user to apply various spatial and temporal analyses,
-including map visualizations and event tree colourings.
+The application provides a graphical workflow for:
+\itemize{
+\item Uploading and filtering datasets.
+\item Constructing event trees.
+\item Manual and automatic stage colouring.
+\item Prior specification and editing.
+\item Generating staged trees and Chain Event Graphs.
+\item Interactive spatial analysis using shapefiles.
+\item Computing conditional probability maps from CEGs.
+\item Exploring reduced CEGs and florets.
+}
+
+The application supports both manual stage specification and automated
+stage discovery using Agglomerative Hierarchical Clustering (AHC).
+
+Users can:
+\enumerate{
+\item Upload tabular datasets and shapefiles.
+\item Select variables and spatial regions for analysis.
+\item Create and modify event trees interactively.
+\item Specify prior distributions for stages.
+\item Generate Chain Event Graphs and posterior summaries.
+\item Visualise probabilities on interactive leaflet maps.
+}
+
+The application is intended as a graphical interface to the functionality
+provided throughout the package.
 }
 \examples{
-if(interactive()){
-# Run the app
-run_stceg()}
+\dontrun{
+  run_stceg()
+}
 
+}
+\seealso{
+\code{\link{create_event_tree}},
+\code{\link{ahc_colouring}},
+\code{\link{compute_ceg}},
+\code{\link{compute_reduced_ceg}},
+\code{\link{generate_CEG_map}}
 }

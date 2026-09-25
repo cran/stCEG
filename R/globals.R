@@ -1,0 +1,13 @@
+utils::globalVariables(
+  c(
+    "Data",
+    "Posterior",
+    "Posterior_Mean",
+    "Prior",
+    "Prior_Mean",
+    "Prior_Type",
+    "label",
+    "number",
+    "outgoing_edges2"
+  )
+)

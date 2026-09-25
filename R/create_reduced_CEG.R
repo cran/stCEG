@@ -1,126 +1,243 @@
-#' Create a Reduced Chain Event Graph (CEG)
+#' Compute a Reduced Chain Event Graph
 #'
-#' This function generates a reduced version of a Chain Event Graph (CEG) based on a set of starting labels.
-#' It extracts connected nodes and edges from the input CEG object, and visualizes the result using the visNetwork package.
+#' Extracts one or more florets from a Chain Event Graph (CEG) beginning at
+#' specified edge labels and returns the downstream subgraph as a reduced CEG.
 #'
-#' @param ceg_object A list containing the Chain Event Graph (CEG) data, including nodes and edges.
-#'   The `ceg_object` must have the structure `ceg_object$ceg$x$nodes` and `ceg_object$ceg$x$edges`.
-#' @param start_labels A character vector containing the labels of the nodes from which the floret extraction should start.
-#' @param level_separation A numeric value determining the separation between levels in the hierarchical layout. Default is 1200.
-#' @param node_distance A numeric value controlling the distance between nodes in the hierarchical layout. Default is 300.
+#' For each supplied edge label, the function identifies all matching edges and
+#' recursively traverses descendant situations and transitions. The resulting
+#' graph contains only the nodes and edges reachable from the selected starting
+#' labels.
 #'
-#' @return A visNetwork object representing the reduced CEG, with interactive visualization features,
-#'   such as node selection, highlighting of edges, and layout manipulation.
+#' @param ceg An object of class \code{"ceg"} created by
+#'   \code{\link{compute_ceg}}.
 #'
-#' @import visNetwork
-#' @import igraph
-#' @import sf
-#' @importFrom dplyr %>% select filter mutate arrange summarise summarise_all group_by ungroup distinct rename pull relocate bind_rows bind_cols left_join right_join inner_join full_join anti_join semi_join rowwise across everything case_when
-#' @importFrom igraph graph_from_data_frame
-#' @export
+#' @param start_labels A character vector containing one or more edge labels
+#'   from which the reduced CEG should begin.
+#'
+#' @details
+#' The function:
+#' \enumerate{
+#'   \item Locates edges whose \code{label1} values match the supplied
+#'   \code{start_labels}.
+#'   \item Extracts the descendant floret associated with each matching edge.
+#'   \item Recursively traverses all reachable downstream situations.
+#'   \item Combines and deduplicates nodes and edges from all extracted
+#'   florets.
+#' }
+#'
+#' @return
+#' An object of class \code{"reduced_ceg"} containing:
+#' \itemize{
+#'   \item \code{nodes}: nodes contained in the reduced graph.
+#'   \item \code{edges}: edges contained in the reduced graph.
+#'   \item \code{start_labels}: labels used to generate the reduction.
+#' }
 #'
 #' @examples
-#' data <- homicides
-#' event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-#' coloured_tree <- ahc_colouring(event_tree)
+#' \dontrun{
+#' data("Medical_Trial")
 #'
-#' tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-#' staged_tree <- staged_tree_prior(coloured_tree, tree_priors)
-#' ceg <- create_ceg(staged_tree, view_table = TRUE)
-#' create_reduced_CEG(ceg, "Adult")
+#' et <- create_event_tree(Medical_Trial)
+#' st <- ahc_colouring(et)
+#' st_priors <- compute_staged_tree_priors(st)
+#' ceg <- compute_ceg(st_priors)
 #'
+#' reduced_ceg <- compute_reduced_ceg(
+#'   ceg,
+#'   start_labels = "Recovered"
+#' )
 #'
-create_reduced_CEG <- function(ceg_object, start_labels, level_separation = 1200, node_distance = 300) {
+#' print(reduced_ceg)
+#' summary(reduced_ceg)
+#' }
+#'
+#' @seealso
+#' \code{\link{compute_ceg}},
+#' \code{\link{plot.reduced_ceg}}
+#'
+#' @export
+compute_reduced_ceg <- function(ceg, start_labels) {
 
-  extract_floret <- function(nodes, edges, start_label1) {
-    # Find all 'from' edges associated with the start_label1
-    start_edges <- edges[edges$label1 == start_label1, ]
+  if (!inherits(ceg, "ceg")) {
+    stop("Input must be an object of class 'ceg'.")
+  }
 
+  nodes <- ceg$nodes
+  edges <- ceg$edges
+
+  ## ----------------------------------------------------------------------
+  ## Helper: extract floret from a single start label
+  ## ----------------------------------------------------------------------
+
+  extract_floret <- function(start_label) {
+
+    start_edges <- edges[edges$label1 == start_label, ]
     if (nrow(start_edges) == 0) {
-      return(list(nodes = data.frame(), edges = data.frame()))
+      return(list(nodes = nodes[0, ], edges = edges[0, ]))
     }
 
-    # Initialize sets for floret nodes and edges
-    floret_nodes <- list()
-    floret_edges <- data.frame()
-    visited_nodes <- c()
+    visited <- character(0)
+    floret_edges <- edges[0, ]
 
-    # Recursive function to traverse and collect connected nodes and edges
-    collect_floret <- function(current_node) {
-      # Find edges starting from the current node
-      outgoing_edges <- edges[edges$from == current_node, ]
+    collect <- function(node_id) {
 
-      # Eliminate edges leading into or before the starting node
-      outgoing_edges <- outgoing_edges[outgoing_edges$to != current_node, ]
+      out_edges <- edges[edges$from == node_id, ]
+      out_edges <- out_edges[out_edges$to != node_id, ]
 
-      # Add the new edges to the floret set
-      if (nrow(outgoing_edges) > 0) {
-        floret_edges <<- rbind(floret_edges, outgoing_edges)
+      if (nrow(out_edges) > 0) {
+        floret_edges <<- rbind(floret_edges, out_edges)
       }
 
-      # Get the 'to' nodes from these edges
-      to_nodes <- outgoing_edges$to
+      new_nodes <- out_edges$to
+      new_nodes <- new_nodes[!new_nodes %in% visited]
 
-      # Add new nodes to the floret set if not already added
-      new_nodes <- to_nodes[!to_nodes %in% visited_nodes]
-      visited_nodes <<- c(visited_nodes, new_nodes)
+      visited <<- c(visited, new_nodes)
 
-      floret_nodes <<- c(floret_nodes, setNames(as.list(new_nodes), new_nodes))
-
-      # Recursively process each new node
-      for (node in new_nodes) {
-        collect_floret(node)
-      }
+      for (n in new_nodes) collect(n)
     }
 
-    # Process all starting edges
     for (i in seq_len(nrow(start_edges))) {
-      start_node <- start_edges$to[i]
-
-      if (!start_node %in% visited_nodes) {
-        visited_nodes <- c(visited_nodes, start_node)
-        floret_nodes <- c(floret_nodes, setNames(list(start_node), start_node))
-        collect_floret(start_node)
+      to_node <- start_edges$to[i]
+      if (!to_node %in% visited) {
+        visited <- c(visited, to_node)
+        collect(to_node)
       }
     }
 
-    # Filter the nodes dataframe to include only nodes in the floret
-    floret_nodes_df <- nodes[nodes$id %in% names(floret_nodes), ]
-
-    list(nodes = floret_nodes_df, edges = floret_edges)
+    floret_nodes <- nodes[nodes$id %in% visited, ]
+    list(nodes = floret_nodes, edges = floret_edges)
   }
 
+  ## ----------------------------------------------------------------------
+  ## Extract all florets
+  ## ----------------------------------------------------------------------
 
+  all_nodes <- nodes[0, ]
+  all_edges <- edges[0, ]
 
-  extract_florets <- function(ceg_object, start_labels) {
-    nodes <- ceg_object$ceg$x$nodes
-    edges <- ceg_object$ceg$x$edges
-    # Initialize sets for floret nodes and edges
-    all_floret_nodes <- data.frame()
-    all_floret_edges <- data.frame()
-
-    for (start_label in start_labels) {
-      floret <- extract_floret(nodes, edges, start_label)
-
-      # Combine results
-      all_floret_nodes <- rbind(all_floret_nodes, floret$nodes)
-      all_floret_edges <- rbind(all_floret_edges, floret$edges)
-    }
-
-    # Ensure unique nodes and edges
-    all_floret_nodes <- unique(all_floret_nodes)
-    all_floret_edges <- unique(all_floret_edges)
-
-    list(nodes = all_floret_nodes, edges = all_floret_edges)
+  for (lab in start_labels) {
+    fl <- extract_floret(lab)
+    all_nodes <- rbind(all_nodes, fl$nodes)
+    all_edges <- rbind(all_edges, fl$edges)
   }
 
-  reduced_data <- extract_florets(ceg_object, start_labels)
+  all_nodes <- unique(all_nodes)
+  all_edges <- unique(all_edges)
 
-  # Generate the visNetwork visualization
-  network_plot <- visNetwork(nodes = reduced_data$nodes, edges = reduced_data$edges) %>%
+  ## ----------------------------------------------------------------------
+  ## Return S3 object
+  ## ----------------------------------------------------------------------
+
+  structure(
+    list(
+      nodes = all_nodes,
+      edges = all_edges,
+      start_labels = start_labels
+    ),
+    class = "reduced_ceg"
+  )
+}
+
+#' Plot a Reduced Chain Event Graph
+#'
+#' Produces an interactive visualisation of a reduced Chain Event Graph using
+#' \pkg{visNetwork}.
+#'
+#' Edge labels may display observed counts, prior values, posterior values,
+#' prior probabilities, posterior probabilities or the original edge labels.
+#'
+#' Selecting a node highlights incoming and outgoing transitions to aid
+#' interpretation of the local graph structure.
+#'
+#' @param x An object of class \code{"reduced_ceg"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @param label_type Character string specifying which edge labels to display.
+#'   Supported values are:
+#'   \itemize{
+#'     \item \code{"posterior_mean"} (default)
+#'     \item \code{"posterior"}
+#'     \item \code{"prior_mean"}
+#'     \item \code{"prior"}
+#'     \item any other value displays the original edge labels
+#'   }
+#'
+#' @param level_separation Numeric value controlling spacing between graph
+#'   levels. Default is \code{1200}.
+#'
+#' @param node_distance Numeric value controlling spacing between nodes.
+#'   Default is \code{400}.
+#'
+#' @param font_size Numeric value controlling edge-label font size.
+#'   Default is \code{80}.
+#'
+#' @return
+#' A \pkg{visNetwork} htmlwidget.
+#'
+#' @examples
+#' \dontrun{
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' reduced_ceg <- compute_reduced_ceg(
+#'   ceg,
+#'   start_labels = "Adult"
+#' )
+#'
+#' plot(reduced_ceg)
+#'
+#' plot(reduced_ceg, label_type = "posterior")
+#'
+#' plot(reduced_ceg, label_type = "prior_mean")
+#' }
+#'
+#' @seealso
+#' \code{\link{compute_reduced_ceg}}
+#'
+#' @method plot reduced_ceg
+#' @export
+plot.reduced_ceg <- function(x,
+                             label_type = "posterior_mean",
+                             level_separation = 1200,
+                             node_distance = 400,
+                             font_size = 80,
+                             ...) {
+
+
+  nodes <- x$nodes
+  edges <- x$edges
+  edges$font.size <- font_size
+
+  if (label_type == "posterior") {
+    edges$label <- edges$label_individuals
+  } else if (label_type == "posterior_mean") {
+    edges$label <- edges$label_posterior
+  } else if (label_type == "prior_mean") {
+    edges$label <- edges$label_prior_mean
+  } else if (label_type == "prior") {
+    edges$label <- edges$label_prior
+  } else {
+    edges$label <- edges$label1
+  }
+
+  print(edges$label)
+
+  visNetwork::visNetwork(nodes = nodes, edges = edges) %>%
     visHierarchicalLayout(direction = "LR", levelSeparation = level_separation) %>%
     visNodes(scaling = list(min = 10, max = 10), font = list(vadjust = -170), fixed = TRUE) %>%
-    visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 5))) %>%
+    visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 5)), smooth = TRUE) %>%
     visOptions(
       manipulation = list(
         enabled = FALSE,
@@ -138,11 +255,6 @@ create_reduced_CEG <- function(ceg_object, start_labels, level_separation = 1200
       navigationButtons = TRUE
     ) %>%
     visPhysics(hierarchicalRepulsion = list(nodeDistance = node_distance), stabilization = TRUE) %>%
-    visEvents(
-      selectNode = "function(params) { /* Node selection code */ }",
-      deselectNode = "function(params) { /* Deselect code */ }"
-    ) %>%
-    visEvents(stabilizationIterationsDone = "function() { this.physics.options.enabled = false; }") %>%
     visEvents(
       selectNode = "function(params) {
         var selectedNodeIds = params.nodes; // Array of selected node IDs
@@ -207,7 +319,114 @@ create_reduced_CEG <- function(ceg_object, start_labels, level_separation = 1200
       }"
     )%>%
     visEvents(stabilizationIterationsDone = "function() { this.physics.options.enabled = false; }")
-
-  # Print the network plot
-  return(list(reduced_ceg = network_plot))
 }
+
+#' Print a Reduced Chain Event Graph
+#'
+#' Prints a concise summary of a reduced Chain Event Graph including the number
+#' of nodes, edges and starting labels used to construct the graph.
+#'
+#' @param x An object of class \code{"reduced_ceg"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' The supplied \code{"reduced_ceg"} object, invisibly.
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' reduced_ceg <- compute_reduced_ceg(
+#'   ceg,
+#'   start_labels = "Adult"
+#' )
+#'
+#' print(reduced_ceg)
+#'
+#'
+#' @method print reduced_ceg
+#' @export
+print.reduced_ceg <- function(x, ...) {
+
+  cat("Reduced Chain Event Graph\n")
+  cat("=========================\n")
+
+  cat("Nodes:   ", nrow(x$nodes), "\n")
+  cat("Edges:   ", nrow(x$edges), "\n")
+  cat("Start labels: ", paste(x$start_labels, collapse = ", "), "\n\n")
+
+  cat("Use summary(x) for details.\n")
+  cat("Use plot(x) to visualize.\n")
+
+  invisible(x)
+}
+
+#' Summarise a Reduced Chain Event Graph
+#'
+#' Produces a summary of a reduced Chain Event Graph including graph size,
+#' levels present and stage colours represented in the extracted subgraph.
+#'
+#' @param object An object of class \code{"reduced_ceg"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' An object of class \code{"summary_reduced_ceg"} containing:
+#' \itemize{
+#'   \item Number of nodes.
+#'   \item Number of edges.
+#'   \item Starting labels used for extraction.
+#'   \item Levels represented in the reduced graph.
+#'   \item Stage colours present in the reduced graph.
+#' }
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' reduced_ceg <- compute_reduced_ceg(
+#'   ceg,
+#'   start_labels = "Adult"
+#' )
+#' summary(reduced_ceg)
+#'
+#'
+#' @method summary reduced_ceg
+#' @export
+summary.reduced_ceg <- function(object, ...) {
+
+  out <- list(
+    n_nodes = nrow(object$nodes),
+    n_edges = nrow(object$edges),
+    start_labels = object$start_labels,
+    levels = sort(unique(object$nodes$level)),
+    colours = unique(object$nodes$color)
+  )
+
+  class(out) <- "summary_reduced_ceg"
+  out
+}
+

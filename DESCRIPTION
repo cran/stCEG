@@ -1,6 +1,6 @@
 Package: stCEG
 Title: Fully Customizable Chain Event Graphs over Spatial Areas
-Version: 0.1.0
+Version: 1.1.0
 Authors@R: c(
   person("Hollie", "Calley", email = "hc629@exeter.ac.uk", role = c("aut", "cre"),
          comment = c(ORCID = "0009-0002-1814-8428")),
@@ -11,21 +11,18 @@ URL: https://github.com/holliecalley/stCEG
 BugReports: https://github.com/holliecalley/stCEG/issues
 License: GPL (>= 3)
 Encoding: UTF-8
-RoxygenNote: 7.3.2
-Imports: DT, RColorBrewer, colorspace, crayon, dplyr, gtools,
-        htmltools, htmlwidgets, hwep, igraph, leaflet, purrr, scales,
-        sf, shiny, shinyWidgets, shinycssloaders, shinyjqui, shinyjs,
-        sortable, spData, stringr, tidyr, tidyverse, viridis,
-        visNetwork, zoo
+Imports: DT, dplyr, htmlwidgets, igraph, leaflet, magrittr, purrr, sf,
+        shiny, shinyWidgets, shinyjs, viridis, visNetwork, zoo
 Suggests: randomcoloR, colourpicker
-Depends: R (>= 3.5)
+Depends: R (>= 4.1.0)
 LazyData: true
+Config/roxygen2/version: 8.1.0
 NeedsCompilation: no
-Packaged: 2025-07-03 15:08:22 UTC; holliecalley
+Packaged: 2026-09-24 11:25:04 UTC; holliecalley
 Author: Hollie Calley [aut, cre] (ORCID:
     <https://orcid.org/0009-0002-1814-8428>),
   Daniel Williamson [ctb] (ORCID:
     <https://orcid.org/0000-0001-8917-3300>)
 Maintainer: Hollie Calley <hc629@exeter.ac.uk>
 Repository: CRAN
-Date/Publication: 2025-07-07 13:00:02 UTC
+Date/Publication: 2026-09-25 08:30:02 UTC

@@ -2,31 +2,81 @@
 % Please edit documentation in R/ahc_colouring.R
 \name{ahc_colouring}
 \alias{ahc_colouring}
-\title{Agglomerative Hierarchical Clustering (AHC) Colouring for Event Trees}
+\title{Apply Agglomerative Hierarchical Clustering (AHC) Stage Colouring}
 \usage{
 ahc_colouring(event_tree_obj, level_separation = 1000, node_distance = 300)
 }
 \arguments{
-\item{event_tree_obj}{A list containing an event tree or staged tree, and other relevant data for the event tree processing.}
+\item{event_tree_obj}{An object of class \code{"event_tree"} or
+\code{"staged_tree"} containing node and edge information together with
+the underlying dataset stored in \code{$data}.}
 
-\item{level_separation}{Numeric value defining the level separation between nodes in the event tree (default is 1000).}
+\item{level_separation}{Numeric value controlling the separation between
+levels when plotting the resulting staged tree. Included for compatibility
+with staged tree visualisation methods. Default is \code{1000}.}
 
-\item{node_distance}{Numeric value defining the distance between nodes (default is 300).}
+\item{node_distance}{Numeric value controlling the spacing between nodes when
+plotting the resulting staged tree. Included for compatibility with staged
+tree visualisation methods. Default is \code{300}.}
 }
 \value{
-A \code{visNetwork} object representing the staged tree.
+An object of class \code{"staged_tree"} containing:
+\itemize{
+\item Updated node colours representing the inferred stage structure.
+\item Original edge information.
+\item The underlying dataset.
+\item Node-level method annotations identifying stages generated using
+the AHC procedure.
+}
 }
 \description{
-This function applies Agglomerative Hierarchical Clustering (AHC) to colour the nodes of an event tree, taking into account their outgoing edges and stage information. It returns a coloured event tree based on the computed priors.
+Applies an Agglomerative Hierarchical Clustering (AHC) stage-merging
+algorithm to an event tree or staged tree. The algorithm groups situations
+with equivalent floret structures and iteratively merges stages according to
+a Bayesian scoring criterion based on Dirichlet-Multinomial likelihoods.
 }
 \details{
-This function processes an event tree or partial staged tree, calculates priors based on the outgoing edges from each node, and performs Agglomerative Hierarchical Clustering (AHC) to colour the nodes of the event tree. It returns a \code{visNetwork} object that can be visualized as a coloured event tree. The function also computes the likelihood and scores based on merging stages in the event tree.
+Nodes assigned to the same stage are coloured identically, and the resulting
+stage allocation is returned as a \code{"staged_tree"} object suitable for
+further analysis, visualisation, or CEG construction.
+
+The algorithm only considers non-terminal situations when forming stages.
+Root and sink nodes are always assigned the default white colour and are not
+included in stage merging.
+
+The procedure:
+\enumerate{
+\item Extracts node, edge, and dataset information from the supplied
+event tree or staged tree object.
+\item Identifies comparable situations based on their level and outgoing
+edge labels.
+\item Constructs Dirichlet prior vectors and floret count vectors for each
+situation.
+\item Iteratively merges candidate stages whenever doing so increases the
+Bayesian score.
+\item Assigns a unique colour to each resulting stage using the
+\pkg{randomcoloR} package.
+\item Returns a new \code{"staged_tree"} object containing the updated
+stage colouring.
+}
+
+A consistency check is performed before returning the staged tree to ensure
+that nodes sharing the same stage colour have identical outgoing edge
+structures. An error is raised if such conflicts are detected.
 }
 \examples{
-data <- homicides
-event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-event_tree
-coloured_tree <- ahc_colouring(event_tree)
-coloured_tree
+et <- create_event_tree(homicides, c(1:3))
 
+st <- ahc_colouring(et)
+
+print(st)
+summary(st)
+plot(st)
+
+
+}
+\seealso{
+\code{\link{create_staged_tree}},
+\code{\link{plot.staged_tree}},
+\code{\link{summary.staged_tree}}
 }

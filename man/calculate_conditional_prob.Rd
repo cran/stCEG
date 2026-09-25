@@ -2,7 +2,7 @@
 % Please edit documentation in R/map_plotting.R
 \name{calculate_conditional_prob}
 \alias{calculate_conditional_prob}
-\title{Calculate Conditional Probability in a Chain Event Graph (CEG)}
+\title{Calculate a Conditional Probability from CEG Paths}
 \usage{
 calculate_conditional_prob(
   path_df,
@@ -12,20 +12,65 @@ calculate_conditional_prob(
 )
 }
 \arguments{
-\item{path_df}{A data frame containing paths and their corresponding products,
-as returned by the \code{calculate_path_products} function.}
+\item{path_df}{Output from \code{\link{calculate_path_products}}.}
 
-\item{unique_values}{A character vector containing the unique values (e.g., labels or categories)
-to condition on.}
+\item{unique_values}{Character vector of values appearing in the CEG paths.}
 
-\item{selected_indices}{A numeric vector of indices corresponding to the groupings of the unique values.}
+\item{selected_indices}{Numeric vector indicating which values belong to the
+same conditioning group.}
 
-\item{last_group}{A string representing the last group for which the conditional probability is to be calculated.}
+\item{last_group}{Character string corresponding to the event whose
+conditional probability is required.}
 }
 \value{
-A numeric value representing the conditional probability P(last_group | unique_values).
+A numeric value between 0 and 1.
 }
 \description{
-This function calculates the conditional probability of a specified group of conditions occurring,
-given a set of unique values, based on the calculated path products.
+Computes a conditional probability using path probabilities obtained from a
+Chain Event Graph.
+}
+\details{
+Given a set of conditioning variables and a target outcome, the function
+evaluates:
+
+\deqn{
+P(\mathrm{last\_group}\mid \mathrm{conditions})
+}
+
+by summing the probabilities of all relevant paths.
+}
+\examples{
+et <- create_event_tree(homicides, c(1:3))
+st <- ahc_colouring(et)
+
+priors <- specify_priors(
+  st,
+  prior_type = "Uniform"
+)
+
+st_priors <- compute_staged_tree_priors(
+  st,
+  priors
+)
+
+ceg <- compute_ceg(st_priors)
+
+path_df <- calculate_path_products(
+  ceg$nodes,
+  ceg$edges
+)
+
+head(path_df)
+
+calculate_conditional_prob(
+  path_df,
+  unique_values = c("Adult", "Male"),
+  selected_indices = c(1, 2),
+  last_group = "Shooting"
+)
+
+
+}
+\seealso{
+\code{\link{calculate_path_products}}
 }

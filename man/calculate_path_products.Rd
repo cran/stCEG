@@ -2,25 +2,57 @@
 % Please edit documentation in R/map_plotting.R
 \name{calculate_path_products}
 \alias{calculate_path_products}
-\title{Calculate Path Products in a Chain Event Graph (CEG)}
+\title{Calculate Path Probabilities in a Chain Event Graph}
 \usage{
 calculate_path_products(nodes_df, edges_df, root_node = "w0")
 }
 \arguments{
-\item{nodes_df}{A data frame representing the nodes in the CEG.}
+\item{nodes_df}{A node data frame from a \code{"ceg"} object.}
 
-\item{edges_df}{A data frame representing the edges in the CEG, containing columns for \code{from}, \code{to},
-\code{label1}, and \code{posterior_mean}.}
+\item{edges_df}{An edge data frame from a \code{"ceg"} object containing
+posterior transition probabilities in the \code{posterior_mean} column.}
 
-\item{root_node}{A string specifying the label of the root node from which to start the traversal. Default is "w0".}
+\item{root_node}{Character string identifying the root node. Default is
+\code{"w0"}.}
 }
 \value{
-A data frame with two columns:
-\item{path}{The sequence of nodes in the path, as a string of node labels separated by " -> "}
-\item{product}{The product of the posterior means along the path}
+A data frame containing:
+\itemize{
+\item \code{path}: sequence of edge labels defining the path.
+\item \code{product}: probability associated with the path.
+}
 }
 \description{
-This function calculates the products of probabilities along all paths from a specified root node
-in a Chain Event Graph (CEG). It traverses the graph, multiplying the posterior means of the edges
-for each path, and returns the resulting paths and their products.
+Calculates the probability associated with every root-to-leaf path in a
+Chain Event Graph (CEG) by recursively multiplying the posterior transition
+probabilities along each path.
+}
+\details{
+The resulting output can be used for conditional probability calculations
+and geographical probability mapping.
+}
+\examples{
+et <- create_event_tree(homicides, c(1:3))
+st <- ahc_colouring(et)
+
+priors <- specify_priors(
+  st,
+  prior_type = "Uniform"
+)
+
+st_priors <- compute_staged_tree_priors(
+  st,
+  priors
+)
+
+ceg <- compute_ceg(st_priors)
+
+path_df <- calculate_path_products(
+  ceg$nodes,
+  ceg$edges
+)
+
+head(path_df)
+
+
 }

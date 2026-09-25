@@ -1,281 +1,670 @@
-#' Calculate Path Products in a Chain Event Graph (CEG)
+#' Calculate Path Probabilities in a Chain Event Graph
 #'
-#' This function calculates the products of probabilities along all paths from a specified root node
-#' in a Chain Event Graph (CEG). It traverses the graph, multiplying the posterior means of the edges
-#' for each path, and returns the resulting paths and their products.
+#' Calculates the probability associated with every root-to-leaf path in a
+#' Chain Event Graph (CEG) by recursively multiplying the posterior transition
+#' probabilities along each path.
 #'
-#' @param nodes_df A data frame representing the nodes in the CEG.
-#' @param edges_df A data frame representing the edges in the CEG, containing columns for `from`, `to`,
-#'   `label1`, and `posterior_mean`.
-#' @param root_node A string specifying the label of the root node from which to start the traversal. Default is "w0".
+#' The resulting output can be used for conditional probability calculations
+#' and geographical probability mapping.
 #'
-#' @return A data frame with two columns:
-#'   \item{path}{The sequence of nodes in the path, as a string of node labels separated by " -> "}
-#'   \item{product}{The product of the posterior means along the path}
+#' @param nodes_df A node data frame from a \code{"ceg"} object.
+#' @param edges_df An edge data frame from a \code{"ceg"} object containing
+#'   posterior transition probabilities in the \code{posterior_mean} column.
+#' @param root_node Character string identifying the root node. Default is
+#'   \code{"w0"}.
 #'
-#' @importFrom dplyr %>% select filter mutate arrange summarise summarise_all group_by ungroup distinct rename pull relocate bind_rows bind_cols left_join right_join inner_join full_join anti_join semi_join rowwise across everything case_when
+#' @return
+#' A data frame containing:
+#' \itemize{
+#'   \item \code{path}: sequence of edge labels defining the path.
+#'   \item \code{product}: probability associated with the path.
+#' }
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' path_df <- calculate_path_products(
+#'   ceg$nodes,
+#'   ceg$edges
+#' )
+#'
+#' head(path_df)
+#'
+#'
 #' @export
-#'
-#'
 calculate_path_products <- function(nodes_df, edges_df, root_node = "w0") {
 
-  # Initialize a list to store paths and products
-  paths_list <- list()
+  paths <- list()
 
-  # Find all paths from root node (could use graph traversal here)
-  traverse_paths <- function(node, path, product) {
-    # Find outgoing edges from current node
+  traverse <- function(node, path, product) {
     next_edges <- edges_df[edges_df$from == node, ]
-
     if (nrow(next_edges) == 0) {
-      # If no outgoing edges, it's a terminal node, save the path and product
-      paths_list <<- append(paths_list, list(list(path = path, product = product)))
-    } else {
-      # Otherwise, traverse the next nodes
-      for (i in 1:nrow(next_edges)) {
-        # Access the posteriormean from the edge
-        posteriormean <- as.numeric(next_edges$posterior_mean[i])
+      paths[[length(paths) + 1]] <<- list(
+        path = path,
+        product = product
+      )
+      return()
+    }
 
-        # Append the label1 (from edges_df) to the path
-        new_path <- c(path, next_edges$label1[i])
-
-        # Continue traversal with the new node
-        traverse_paths(next_edges$to[i], new_path, product * posteriormean)
-      }
+    for (i in seq_len(nrow(next_edges))) {
+      pm <- as.numeric(next_edges$posterior_mean[i])
+      new_path <- c(path, next_edges$label1[i])
+      traverse(next_edges$to[i], new_path, product * pm)
     }
   }
 
-  # Start traversal from the root node
-  traverse_paths(root_node, path = character(0), product = 1)
+  traverse(root_node, character(0), 1)
 
-  # Convert list of paths and products into a data frame
-  path_df <- do.call(rbind, lapply(paths_list, function(x) data.frame(path = paste(x$path, collapse = " -> "), product = x$product)))
+  out <- do.call(
+    rbind,
+    lapply(paths, function(x) {
+      data.frame(
+        path = paste(x$path, collapse = " -> "),
+        product = x$product,
+        stringsAsFactors = FALSE
+      )
+    })
+  )
 
-  return(path_df)
+  out
 }
 
 
-#' Calculate Conditional Probability in a Chain Event Graph (CEG)
-#'
-#' This function calculates the conditional probability of a specified group of conditions occurring,
-#' given a set of unique values, based on the calculated path products.
-#'
-#' @param path_df A data frame containing paths and their corresponding products,
-#'   as returned by the `calculate_path_products` function.
-#' @param unique_values A character vector containing the unique values (e.g., labels or categories)
-#'   to condition on.
-#' @param selected_indices A numeric vector of indices corresponding to the groupings of the unique values.
-#' @param last_group A string representing the last group for which the conditional probability is to be calculated.
-#'
-#' @return A numeric value representing the conditional probability P(last_group | unique_values).
-#'
-#' @importFrom dplyr %>% select filter mutate arrange summarise summarise_all group_by ungroup distinct rename pull relocate bind_rows bind_cols left_join right_join inner_join full_join anti_join semi_join rowwise across everything case_when
-#' @export
-#'
-calculate_conditional_prob <- function(path_df, unique_values, selected_indices, last_group) {
-  # Ensure unique_values is a character vector
-  unique_values <- as.character(unique_values)
 
-  # Group values by their assigned index
+#' Calculate a Conditional Probability from CEG Paths
+#'
+#' Computes a conditional probability using path probabilities obtained from a
+#' Chain Event Graph.
+#'
+#' Given a set of conditioning variables and a target outcome, the function
+#' evaluates:
+#'
+#' \deqn{
+#' P(\mathrm{last\_group}\mid \mathrm{conditions})
+#' }
+#'
+#' by summing the probabilities of all relevant paths.
+#'
+#' @param path_df Output from \code{\link{calculate_path_products}}.
+#' @param unique_values Character vector of values appearing in the CEG paths.
+#' @param selected_indices Numeric vector indicating which values belong to the
+#'   same conditioning group.
+#' @param last_group Character string corresponding to the event whose
+#'   conditional probability is required.
+#'
+#' @return
+#' A numeric value between 0 and 1.
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' path_df <- calculate_path_products(
+#'   ceg$nodes,
+#'   ceg$edges
+#' )
+#'
+#' head(path_df)
+#'
+#' calculate_conditional_prob(
+#'   path_df,
+#'   unique_values = c("Adult", "Male"),
+#'   selected_indices = c(1, 2),
+#'   last_group = "Shooting"
+#' )
+#'
+#'
+#' @seealso
+#' \code{\link{calculate_path_products}}
+#'
+#' @export
+calculate_conditional_prob <- function(path_df, unique_values, selected_indices, last_group) {
+
+  unique_values <- as.character(unique_values)
   grouped_conditions <- split(unique_values, selected_indices)
 
-  # Step 1: Filter paths directly based on AND/OR logic
-  condition_paths <- path_df[sapply(path_df$path, function(path) {
-    path_components <- unlist(strsplit(path, " -> "))  # Convert path to vector
+  condition_paths <- path_df[
+    sapply(path_df$path, function(p) {
+      comps <- unlist(strsplit(p, " -> "))
+      all(sapply(grouped_conditions, function(group) {
+        if (length(group) == 1) {
+          group %in% comps
+        } else {
+          any(group %in% comps)
+        }
+      }))
+    }),
+    ,
+    drop = FALSE
+  ]
 
-    # Apply AND/OR logic for each group
-    all(sapply(grouped_conditions, function(group) {
-      if (length(group) == 1) {
-        group %in% path_components  # AND condition: must be present
-      } else {
-        any(group %in% path_components)  # OR condition: at least one must be present
-      }
-    }))
-  }), , drop = FALSE]  # Prevent accidental list conversion
-
-  # If no matching paths exist, return 0 probability
   if (nrow(condition_paths) == 0) {
-    print(paste("P(", last_group, "|", paste(unique_values, collapse = ", "), ") = 0"))
     return(0)
   }
 
-  # Step 2: Compute joint probability P(last_group and unique_values)
-  joint_prob <- sum(condition_paths$product[sapply(condition_paths$path, function(path) {
-    last_group %in% unlist(strsplit(path, " -> "))
-  })])
+  joint_prob <- sum(condition_paths$product[
+    sapply(condition_paths$path, function(p) {
+      last_group %in% unlist(strsplit(p, " -> "))
+    })
+  ])
 
-  # Step 3: Compute marginal probability P(unique_values)
   marginal_prob <- sum(condition_paths$product)
 
-  # Step 4: Compute conditional probability P(last_group | unique_values)
-  conditional_prob <- ifelse(marginal_prob > 0, joint_prob / marginal_prob, 0)
+  if (marginal_prob == 0) return(0)
 
-  #print(paste("P(", last_group, "|", paste(unique_values, collapse = ", "), ") = ", conditional_prob, sep = ""))
-  return(conditional_prob)
+  joint_prob / marginal_prob
 }
 
 
-#' Calculate Area Probabilities in a Chain Event Graph (CEG)
+#' Calculate Area-Specific Conditional Probabilities
 #'
-#' This function calculates the conditional probability of a given last group for each area, based on the
-#' path products and area-specific paths. It leverages the `calculate_conditional_prob` function for each area.
+#' Calculates a conditional probability for each geographical area represented
+#' within a Chain Event Graph.
 #'
-#' @param path_df A data frame containing paths and their corresponding products,
-#'   as returned by the `calculate_path_products` function.
-#' @param unique_values A character vector containing the unique values (e.g., labels or categories)
-#'   to condition on.
-#' @param selected_indices A numeric vector of indices corresponding to the groupings of the unique values.
-#' @param last_group A string representing the last group for which the conditional probability is to be calculated.
-#' @param shapefile_vals A vector of area names (or other geographical identifiers) from the shapefile data.
+#' The function evaluates a specified conditional probability separately for
+#' each area and returns the resulting probabilities as a named list.
 #'
-#' @return A list with area names as keys and their respective conditional probabilities as values.
-#'   If no paths are found for a specific area, the probability is returned as `NA`.
+#' @param path_df Output from \code{\link{calculate_path_products}}.
+#' @param unique_values Character vector of conditioning values.
+#' @param selected_indices Numeric vector indicating grouping structure for the
+#'   conditioning values.
+#' @param last_group Character string specifying the outcome of interest.
+#' @param shapefile_vals Character vector containing area identifiers.
 #'
-#' @importFrom dplyr %>% select filter mutate arrange summarise summarise_all group_by ungroup distinct rename pull relocate bind_rows bind_cols left_join right_join inner_join full_join anti_join semi_join rowwise across everything case_when
+#' @return
+#' A named list of conditional probabilities indexed by area.
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(9,1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' path_df <- calculate_path_products(
+#'   ceg$nodes,
+#'   ceg$edges
+#' )
+#'
+#' probs <- calculate_area_probabilities(
+#'   path_df,
+#'   unique_values = c("Adult"),
+#'   selected_indices = c(2),
+#'   last_group = "Female",
+#'   shapefile_vals = c("West", "South East")
+#' )
+#'
+#'
+#' @seealso
+#' \code{\link{calculate_conditional_prob}}
+#'
 #' @export
-#'
 calculate_area_probabilities <- function(path_df, unique_values, selected_indices, last_group, shapefile_vals) {
-  area_probs <- list()  # Store probabilities for each area
 
-  # Loop over each area in shapefile_vals
+  area_probs <- vector("list", length(shapefile_vals))
+  names(area_probs) <- shapefile_vals
+
   for (area in shapefile_vals) {
-    # Filter paths for the current area
-    area_paths <- path_df[sapply(path_df$path, function(path) {
-      area %in% unlist(strsplit(path, " -> "))  # Ensure area is in path
-    }), , drop = FALSE]
 
-    # If no paths exist for this area, assign probability 0
+    area_paths <- path_df[
+      sapply(path_df$path, function(p) {
+        area %in% unlist(strsplit(p, " -> "))
+      }),
+      ,
+      drop = FALSE
+    ]
+
     if (nrow(area_paths) == 0) {
-      area_probs[[area]] <- NA
+      area_probs[[area]] <- NA_real_
     } else {
-      # Compute probability for the given area
-      area_probs[[area]] <- calculate_conditional_prob(area_paths, unique_values, selected_indices, last_group)
+      area_probs[[area]] <- calculate_conditional_prob(
+        area_paths,
+        unique_values,
+        selected_indices,
+        last_group
+      )
     }
   }
 
-  return(area_probs)  # Return a named list of probabilities
+  area_probs
 }
 
 
 
-#' Generate a Leaflet Map for a Chain Event Graph (CEG)
+
+#' Generate a Chain Event Graph Probability Map
 #'
-#' This function generates an interactive map using the Leaflet package to visualize the probability of each
-#' area in the Chain Event Graph (CEG). The map is color-coded based on area-specific probabilities, which
-#' are calculated from the path products and conditional probabilities.
+#' Creates an interactive leaflet map displaying area-level probabilities
+#' derived from a Chain Event Graph (CEG).
 #'
-#' @param shapefile A Simple Features (sf) object representing the shapefile data for the geographical areas.
-#' @param ceg_object A list containing the Chain Event Graph (CEG) data, including nodes and edges.
-#' @param conditionals A character vector containing the conditions (labels) to condition on when calculating
-#'   area probabilities. Default is the unique edge labels from the `ceg_object`.
-#' @param colour_by A string specifying the label by which to color the map. Default is `NULL`, which colors by
-#'   the label with the maximum level.
-#' @param color_palette A string specifying the color palette to use for the map. Default is "viridis".
+#' Conditional probabilities are calculated for each geographical region and
+#' displayed using a colour scale. Areas that do not appear in the CEG are
+#' reported separately and excluded from colouring.
 #'
-#' @return A Leaflet map object with color-coded polygons representing the areas, with a legend indicating
-#'   the probability values for each area.
+#' @param shapefile An \code{sf} object containing polygon geometries.
+#' @param ceg_object An object of class \code{"ceg"}.
+#' @param conditionals Character vector specifying the conditioning variables.
+#'   By default all unique edge labels are used.
+#' @param colour_by Character string specifying the outcome label whose
+#'   conditional probability should be visualised. If \code{NULL}, the first
+#'   label appearing at the deepest level of the CEG is used.
+#' @param color_palette Character string specifying the viridis palette option.
 #'
-#' @import leaflet
-#' @import sf
-#' @importFrom viridis scale_color_viridis scale_colour_viridis scale_fill_viridis viridis
-#' @importFrom dplyr %>% select filter mutate arrange summarise summarise_all group_by ungroup distinct rename pull relocate bind_rows bind_cols left_join right_join inner_join full_join anti_join semi_join rowwise across everything case_when
+#' @details
+#' The function:
+#' \enumerate{
+#'   \item Calculates all root-to-leaf path probabilities.
+#'   \item Computes conditional probabilities for each geographical region.
+#'   \item Joins probabilities to the supplied shapefile.
+#'   \item Creates an interactive leaflet map with colour-coded polygons.
+#' }
+#'
+#' @return
+#' An object of class \code{"ceg_map"} containing:
+#' \itemize{
+#'   \item \code{map}: leaflet map object.
+#'   \item \code{conditional_probabilities}: probability table.
+#'   \item \code{colour_by}: outcome used for colouring.
+#'   \item \code{conditionals}: conditioning variables.
+#'   \item \code{excluded_polygons}: polygons not present in the CEG.
+#' }
 #'
 #' @examples
-#' data <- homicides
-#' event_tree <- create_event_tree(data, columns = c(9,2,4,5), "both")
-#' coloured_tree <- ahc_colouring(event_tree)
+#' et <- create_event_tree(homicides, c(9,1:3))
+#' st <- ahc_colouring(et)
 #'
-#' tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-#' staged_tree <- staged_tree_prior(coloured_tree, tree_priors)
-#' ceg <- create_ceg(staged_tree, view_table = TRUE)
-#' generate_CEG_map(bcu_shapefile, ceg)
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' map_obj <- generate_CEG_map(
+#'   shapefile = bcu_shapefile,
+#'   ceg_object = ceg,
+#'   colour_by = "Female"
+#' )
+#'
+#'
+#' @seealso
+#' \code{\link{plot.ceg_map}},
+#' \code{\link{summary.ceg_map}}
 #'
 #' @export
-generate_CEG_map <- function(shapefile, ceg_object, conditionals = unique(ceg_object$x$edges$label1), colour_by = NULL, color_palette = "viridis") {
+generate_CEG_map <- function(
+    shapefile,
+    ceg_object,
+    conditionals = unique(ceg_object$edges$label1),
+    colour_by = NULL,
+    color_palette = "viridis"
+) {
 
-  nodes <- ceg_object$ceg$x$nodes
-  edges <- ceg_object$ceg$x$edges
+  nodes <- ceg_object$nodes
+  edges <- ceg_object$edges
 
-
-  # If start_label1 is NULL, set it to the first label1 with max level
   if (is.null(colour_by)) {
     max_level <- max(edges$level, na.rm = TRUE)
-    max_level_rows <- edges[edges$level == max_level, ]
-    colour_by <- max_level_rows$label1[1]  # First label1 with max level
+    colour_by <- edges$label1[edges$level == max_level][1]
   }
 
-  # Step 1: Load Shapefile Data
-  shape_data <- shapefile
-  shape_data <- st_transform(shape_data, crs = 4326)
-  # Step 2: Calculate Path Products (Assume your function is loaded)
+  shape_data <- sf::st_transform(shapefile, crs = 4326)
+
+
   path_df <- calculate_path_products(nodes, edges)
 
-  get_levels_from_conditionals <- function(conditionals, edges_df) {
-    levels <- edges_df %>%
-      filter(label1 %in% conditionals) %>%  # Filter for given label1 values
-      group_by(label1) %>%
-      slice(1) %>%  # Take the first row for each label1
-      ungroup() %>%
-      mutate(label1 = factor(label1, levels = conditionals)) %>%  # Maintain original order
-      arrange(label1) %>%  # Arrange by the factor to keep input order
-      pull(level)  # Extract the level column
+  if (is.null(conditionals)) {
+    # Colour by max-level label
+    max_level <- max(edges$level, na.rm = TRUE)
+    conditionals <- edges$label1[edges$level == max_level]
+  }
 
-    return(levels) # Return levels in the correct order
+  if (!is.null(conditionals)) {
+    conditionals <- unique(conditionals)
+  }
+
+  get_levels_from_conditionals <- function(conditionals, edges_df) {
+    edges_df %>%
+      dplyr::filter(label1 %in% conditionals) %>%
+      dplyr::group_by(label1) %>%
+      dplyr::slice(1) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(label1 = factor(label1, levels = conditionals)) %>%
+      dplyr::arrange(label1) %>%
+      dplyr::pull(level)
   }
 
   selected_indices <- get_levels_from_conditionals(conditionals, edges)
 
-  # Step 3: Calculate Area Probabilities
   area_probs <- calculate_area_probabilities(
-    path_df, conditionals, selected_indices, colour_by, shape_data[[1]]
+    path_df,
+    conditionals,
+    selected_indices,
+    colour_by,
+    shape_data[[1]]
   )
 
-  # Convert area probabilities to a named vector
   area_probs_vec <- unlist(area_probs)
 
-  # Match areas and assign probabilities to shapefile data
+
+  # Remove NA area labels from the CEG output
+  valid_names <- names(area_probs_vec)[!is.na(names(area_probs_vec))]
+
+  # Polygons in the shapefile that are NOT in the CEG
+  missing <- setdiff(shapefile[[1]], valid_names)
+
+  # Now filter shapefile polygons to those present in the CEG
+  shape_data <- shape_data[shape_data[[1]] %in% valid_names, ]
+
+  # Assign probabilities only to matching polygons
   shape_data$area_probs <- area_probs_vec[shape_data[[1]]]
 
-  # Step 4: Assign Colors Based on Area Probabilities
-  assign_colors <- function(probs, palette_name) {
-    color_func <- colorNumeric(viridis(100, option = palette_name), domain = c(1, 0))
 
-    sapply(probs, function(prob) {
-      if (is.na(prob)) "#FFFFFF" else color_func(prob)  # White for NA values
+  assign_colors <- function(probs, palette_name) {
+    color_func <- leaflet::colorNumeric(
+      viridis::viridis(100, option = palette_name),
+      domain = c(0, 1)
+    )
+    sapply(probs, function(p) {
+      if (is.na(p)) "#FFFFFF" else color_func(p)
     })
   }
 
-  # Assign colors based on area probabilities
   shape_data$color_assignment <- assign_colors(shape_data$area_probs, color_palette)
 
-  # Step 5: Generate the Leaflet Map
-  map <- leaflet(data = shape_data) %>%
-    addTiles() %>%
-    addPolygons(
+  map <- leaflet::leaflet(data = shape_data) %>%
+    leaflet::addTiles() %>%
+    leaflet::addPolygons(
       layerId = shape_data[[1]],
       fillColor = shape_data$color_assignment,
       color = "black",
       weight = 1,
-      highlightOptions = highlightOptions(
+      highlightOptions = leaflet::highlightOptions(
         weight = 1, fillOpacity = 0.7, bringToFront = TRUE
       ),
-      opacity = 1, fillOpacity = 0.7,
+      opacity = 1,
+      fillOpacity = 0.7,
       label = ~paste0(as.character(shape_data[[1]]), ": ", round(shape_data$area_probs, 3))
     ) %>%
-    addLegend(
-      pal = colorNumeric(viridis(100, option = color_palette), domain = c(0, 1)),
+    leaflet::addLegend(
+      pal = leaflet::colorNumeric(
+        viridis::viridis(100, option = color_palette),
+        domain = c(0, 1)
+      ),
       values = c(0, 1),
-      title = "Probability", position = "bottomright",
-      labFormat = labelFormat(transform = function(x) round(x, 2))
+      title = "Probability",
+      position = "bottomright",
+      labFormat = leaflet::labelFormat(transform = function(x) round(x, 2))
     )
 
-  transposed_df <- as.data.frame(area_probs)
-  transposed_df <- as.data.frame(t(transposed_df))
+  prob_df <- data.frame(
+    Area = names(area_probs),
+    Probability = unlist(area_probs),
+    row.names = NULL
+  )
 
-  # Optional: Set column name
-  colnames(transposed_df) <- "Probability"
+  out <- list(
+    map = map,
+    valid_names = valid_names,
+    conditional_probabilities = prob_df,
+    colour_by = colour_by,
+    conditionals = conditionals,
+    excluded_polygons = missing
+  )
 
-  return(list(map = map, conditional_probabilities = transposed_df))
+  class(out) <- "ceg_map"
+  out
 }
 
+#' Summarise a CEG Probability Map
+#'
+#' Produces a summary of a \code{"ceg_map"} object, including the number of
+#' mapped areas, probability range and any excluded polygons.
+#'
+#' @param object An object of class \code{"ceg_map"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' An object of class \code{"summary_ceg_map"}.
+#'
+#' @examples
+#' \dontrun{
+#' et <- create_event_tree(homicides, c(9,1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' map_obj <- generate_CEG_map(
+#'   shapefile = bcu_shapefile,
+#'   ceg_object = ceg,
+#'   colour_by = "Female"
+#' )
+#'
+#' summary(map_obj)
+#' }
+#'
+#' @method summary ceg_map
+#' @export
+summary.ceg_map <- function(object, ...) {
+
+  out <- list(
+    n_areas = length(object$valid_names),
+    colour_by = object$colour_by,
+    n_conditionals = length(object$conditionals),
+    min_prob = min(object$conditional_probabilities$Probability, na.rm = TRUE),
+    max_prob = max(object$conditional_probabilities$Probability, na.rm = TRUE),
+    missing_polygons = object$excluded_polygons
+  )
+
+  class(out) <- "summary_ceg_map"
+  out
+}
+
+#' Print a Summary of a CEG Probability Map
+#'
+#' Prints a concise summary of a \code{"summary_ceg_map"} object.
+#'
+#' @param x An object of class \code{"summary_ceg_map"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' The supplied summary object, invisibly.
+#'
+#' @examples
+#' \dontrun{
+#' et <- create_event_tree(homicides, c(9,1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' map_obj <- generate_CEG_map(
+#'   shapefile = bcu_shapefile,
+#'   ceg_object = ceg,
+#'   colour_by = "Female"
+#' )
+#'
+#' print(summary(map_obj))
+#' }
+#'
+#' @method print summary_ceg_map
+#' @export
+print.summary_ceg_map <- function(x, ...) {
+
+  cat("Summary of CEG Map\n")
+  cat("===================\n")
+  cat("Number of areas:        ", x$n_areas, "\n")
+  cat("Coloured by:        ", x$colour_by, "\n")
+  cat("Number of conditionals: ", x$n_conditionals, "\n")
+  cat("Minimum probability:    ", x$min_prob, "\n")
+  cat("Maximum probability:    ", x$max_prob, "\n")
+  cat("Missing polygons:       ", ifelse(length(x$missing_polygons) == 0, "None", paste(x$missing_polygons, collapse = ", ")), "\n")
+
+  invisible(x)
+}
+
+#' Plot a CEG Probability Map
+#'
+#' Displays the interactive leaflet map stored within a
+#' \code{"ceg_map"} object.
+#'
+#' @param x An object of class \code{"ceg_map"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' A leaflet map widget.
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(9,1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' map_obj <- generate_CEG_map(
+#'   shapefile = bcu_shapefile,
+#'   ceg_object = ceg,
+#'   colour_by = "Female"
+#' )
+#'
+#' plot(map_obj)
+#'
+#'
+#' @method plot ceg_map
+#' @export
+plot.ceg_map <- function(x, ...) {
+  x$map
+}
+
+#' Print a CEG Probability Map
+#'
+#' Prints a concise description of a \code{"ceg_map"} object including the
+#' outcome being mapped, probability range and the number of excluded
+#' geographical regions.
+#'
+#' @param x An object of class \code{"ceg_map"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' The supplied \code{"ceg_map"} object, invisibly.
+#'
+#' @examples
+#' \dontrun{
+#' et <- create_event_tree(homicides, c(9,1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' map_obj <- generate_CEG_map(
+#'   shapefile = bcu_shapefile,
+#'   ceg_object = ceg,
+#'   colour_by = "Female"
+#' )
+#'
+#' print(map_obj)
+#' }
+#'
+#' @method print ceg_map
+#' @export
+print.ceg_map <- function(x, ...) {
+
+  cat("CEG Map\n")
+  cat("==============\n")
+
+  cat("Coloured by:        ",
+      x$colour_by, "\n")
+
+  cat("Number of conditionals: ",
+      length(x$conditionals), "\n")
+
+  rng <- range(x$conditional_probabilities$Probability, na.rm = TRUE)
+  cat("Probability range:      ",
+      sprintf("%.3f-%.3f", rng[1], rng[2]),
+      "\n")
+
+  cat("Number of missing polygons:   ",
+      length(x$excluded_polygons), "\n")
+
+  cat("\nUse summary(x) for detailed information.\n")
+  cat("Use plot(x) to display the map.\n")
+
+  invisible(x)
+}
 

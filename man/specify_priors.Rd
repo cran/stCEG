@@ -2,43 +2,68 @@
 % Please edit documentation in R/specify_priors.R
 \name{specify_priors}
 \alias{specify_priors}
-\title{Specify Priors for a Staged Tree Object}
+\title{Specify Stage Priors for a Staged Tree}
 \usage{
-specify_priors(
-  staged_tree_obj,
-  prior_type = "Uniform",
-  ask_edit = TRUE,
-  print_colours = TRUE
-)
+specify_priors(staged_tree_obj, prior_type = "Uniform", custom_priors = NULL)
 }
 \arguments{
-\item{staged_tree_obj}{A staged tree object containing the nodes and edges data for the tree.}
+\item{staged_tree_obj}{An object of class \code{"staged_tree"}.}
 
-\item{prior_type}{A character string indicating the prior type. Options are:
+\item{prior_type}{Character string specifying the prior construction
+method. Supported values are:
 \itemize{
-\item "Uniform": Assigns a Uniform (1,1) prior based on the outgoing edges.
-\item "Phantom": Calculates a Phantom Individuals prior by initialising an alpha based on the maximum number of outgoing edges in the tree and dividing that evenly throughout the tree.
-\item "Custom": Allows the user to manually specify the prior values for each node.
+\item \code{"Uniform"}: assigns equal Dirichlet parameters to each
+outgoing edge.
+\item \code{"Phantom"}: computes a Phantom Individuals prior based on
+the staged tree structure.
 }}
 
-\item{ask_edit}{If TRUE, this allows you to edit priors after choosing an uninformative prior type.}
-
-\item{print_colours}{If TRUE, this prints a colour key for stages. Default is TRUE.}
+\item{custom_priors}{Optional named list of custom prior vectors.
+Names must correspond to stage names (e.g. \code{"u1"}, \code{"u2"}).}
 }
 \value{
-A data frame containing the updated nodes data with the specified priors and their means.
+An object of class \code{"prior_table"} containing a stage-level summary
+of prior distributions.
 }
 \description{
-This function assigns priors to the nodes of a staged tree object. The user can choose from different types of priors, including "Uniform", "Phantom", and "Custom".
+Generates prior distributions for each stage of a staged tree.
 }
 \details{
-The function checks if the necessary columns and structure are present in the input staged tree object. It performs validation on the nodes' levels and ensures that no nodes with non-minimum or non-maximum levels have the colour \verb{#FFFFFF}.
-For the "Uniform" and "Phantom" priors, the function calculates the priors for each node based on their outgoing edges and propagates them through connected nodes. The user can edit these priors if desired.
-The "Custom" option allows the user to manually input prior values for each row. If incorrect values are provided, an error will be raised.
+Prior distributions are specified at the stage level and may be generated
+automatically using a Uniform prior, a Phantom Individuals prior, or
+supplied manually through custom Dirichlet parameters.
+
+The resulting object is used when constructing posterior distributions and
+Chain Event Graphs.
+
+The function groups situations into stages and constructs a stage-level
+prior table containing:
+\itemize{
+\item Stage identifiers.
+\item Stage colours.
+\item Tree levels.
+\item Number of outgoing edges.
+\item Dirichlet prior parameters.
+\item Corresponding prior means.
+}
+
+If \code{custom_priors} is supplied, the supplied values override the
+selected \code{prior_type}.
 }
 \examples{
-data <- homicides
-event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-coloured_tree <- ahc_colouring(event_tree)
-tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
+et <- create_event_tree(homicides, c(1:3))
+st <- ahc_colouring(et)
+
+priors <- specify_priors(
+  st,
+  prior_type = "Uniform"
+)
+
+print(priors)
+summary(priors)
+
+}
+\seealso{
+\code{\link{edit_priors}},
+\code{\link{compute_ceg}}
 }

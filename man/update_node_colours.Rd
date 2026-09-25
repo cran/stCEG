@@ -13,54 +13,73 @@ update_node_colours(
 )
 }
 \arguments{
-\item{event_tree_obj}{A list containing the event tree object (possibly with node deletion). It should include:
-\itemize{
-\item \verb{$eventtree$x$nodes}: A data frame of nodes.
-\item \verb{$eventtree$x$edges}: A data frame of edges.
-\item \verb{$filtereddf}: A filtered data frame associated with the event tree.
-}}
+\item{event_tree_obj}{An object of class \code{"event_tree"} or
+\code{"staged_tree"}.}
 
-\item{node_groups}{A list of character vectors, where each vector contains node IDs belonging to a specific group.}
+\item{node_groups}{A list of character vectors. Each vector contains the
+node identifiers belonging to a single stage.}
 
-\item{colours}{A character vector of colour codes corresponding to each node group. The length of \code{colours} must match \code{node_groups}.}
+\item{colours}{Character vector of colour values corresponding to
+\code{node_groups}. The lengths of \code{node_groups} and
+\code{colours} must be equal.}
 
-\item{level_separation}{Numeric value specifying the spacing between levels in the hierarchical layout.
-Default is \code{1000}.}
+\item{level_separation}{Numeric value controlling spacing between graph
+levels. Included for consistency with earlier versions.}
 
-\item{node_distance}{Numeric value specifying the distance between nodes in the layout.
-Default is \code{300}.}
+\item{node_distance}{Numeric value controlling spacing between nodes.
+Included for consistency with earlier versions.}
 }
 \value{
-A list containing:
+An object of class \code{"staged_tree"} containing:
 \itemize{
-\item \verb{$stagedtree}: A \code{visNetwork} object representing the updated event tree with coloured nodes.
-\item \verb{$filtereddf}: The filtered data frame, returned invisibly.
+\item \code{nodes}: node information including assigned colours.
+\item \code{edges}: edge information inherited from the original tree.
+\item \code{data}: the original dataset.
+\item \code{metadata}: staged tree summary information.
 }
 }
 \description{
-This function updates the colours of nodes in an event tree based on user-defined
-groups while ensuring that nodes with the same colour have consistent outgoing edge labels.
+Assigns stage colours to nodes in an event tree or staged tree and returns
+an updated staged tree object.
 }
 \details{
-The function follows these steps:
-\itemize{
-\item Assigns colours to nodes based on the specified \code{node_groups}.
-\item Ensures that no node appears in multiple groups (raises an error if duplicates exist).
-\item Checks that all nodes with the same colour have identical outgoing edge labels.
-\item Updates the event tree visualization using \code{visNetwork}.
+Nodes assigned the same colour are interpreted as belonging to the same
+stage. The function validates that nodes sharing a colour also share the
+same outgoing edge structure, ensuring consistency with staged tree
+definitions.
+
+The function:
+\enumerate{
+\item Assigns colours to the specified node groups.
+\item Prevents nodes appearing in multiple groups.
+\item Computes outgoing edge labels for every node.
+\item Verifies that nodes sharing a colour have identical outgoing edge
+labels.
+\item Returns the result as an object of class
+\code{"staged_tree"}.
 }
+
+If a colour is assigned to nodes with different outgoing edge structures,
+an error is produced.
 }
 \examples{
-data <- homicides
-event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-event_tree
 
-# Define node groups and colours
-node_groups <- list(c("s1", "s2"), c("s3", "s4"))
-colours <- c("#BBA0CA", "#8AC6D0")
+et <- create_event_tree(homicides, c(1:3))
 
-# Apply colours to the event tree
-coloured_tree <- update_node_colours(event_tree, node_groups, colours)
-coloured_tree
+st <- update_node_colours(
+  et,
+  node_groups = list(c("s1", "s2")),
+  colours = "#BBA0CA"
+)
 
+print(st)
+summary(st)
+plot(st)
+
+
+}
+\seealso{
+\code{\link{create_event_tree}},
+\code{\link{create_staged_tree}},
+\code{\link{ahc_colouring}}
 }

@@ -2,68 +2,85 @@
 % Please edit documentation in R/create_ceg.R
 \name{compare_ceg_models}
 \alias{compare_ceg_models}
-\title{Compare Two Chain Event Graph Models Using Bayes Factors}
+\title{Compare Two Chain Event Graph Models}
 \usage{
-compare_ceg_models(summary1, summary2)
+compare_ceg_models(ceg1, ceg2)
 }
 \arguments{
-\item{summary1}{An object of class \code{summary.chain_event_graph}, typically the output of \code{summary()} applied to a fitted CEG model.}
+\item{ceg1}{An object of class
+\code{"ceg"}.}
 
-\item{summary2}{Another object of class \code{summary.chain_event_graph} to compare with \code{summary1}.}
+\item{ceg2}{An object of class
+\code{"ceg"}.}
 }
 \value{
-An invisible list of class \code{ceg_model_comparison} containing:
-\describe{
-\item{log_marginal_1}{Log marginal likelihood of model 1.}
-\item{log_marginal_2}{Log marginal likelihood of model 2.}
-\item{log_Bayes_factor}{The log Bayes factor comparing model 1 to model 2.}
-\item{Bayes_factor}{The Bayes factor (on the original scale).}
-\item{preferred_model}{The model preferred based on the Bayes factor.}
+An object of class \code{"compare_ceg_models"} containing:
+\itemize{
+\item Log marginal likelihoods for both models.
+\item Log Bayes Factor.
+\item Bayes Factor.
+\item Preferred model.
+\item Evidence measures for each model.
+\item Jeffreys evidence category.
 }
 }
 \description{
-This function compares two fitted Chain Event Graph (CEG) models by evaluating their total log marginal likelihoods and computing the Bayes factor.
-The comparison identifies the preferred model and reports the strength of evidence using Jeffreys' scale.
+Compares two fitted Chain Event Graph (CEG) models using their log marginal
+likelihoods and calculates the corresponding Bayes Factor.
 }
 \details{
-The Bayes factor is calculated as the ratio of marginal likelihoods of the two models: \eqn{BF = \exp(\log BF)}.
-Interpretation of the Bayes factor is guided by Jeffreys' scale:
-\itemize{
-\item \strong{< 1:} Evidence against the alternative model
-\item \strong{1–3:} Weak evidence
-\item \strong{3–10:} Moderate evidence
-\item \strong{10–30:} Strong evidence
-\item \strong{30–100:} Very strong evidence
-\item \strong{> 100:} Decisive evidence
+Evidence in favour of each model is quantified and classified according to
+Jeffreys' scale for Bayes Factors.
+
+The Bayes Factor is computed as:
+
+\deqn{
+BF = \exp(\log p(D \mid M_1) - \log p(D \mid M_2))
 }
 
-The function prints the log marginal likelihoods, log Bayes factor, Bayes factor, and preferred model.
+where \eqn{p(D \mid M)} denotes the marginal likelihood of a model.
+
+The resulting Bayes Factor is interpreted using Jeffreys' evidence scale.
 }
 \examples{
-data <- homicides
-event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-coloured_tree <- ahc_colouring(event_tree)
+\dontrun{
+et <- create_event_tree(homicides, c(1:3))
+st <- ahc_colouring(et)
 
-tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-staged_tree <- staged_tree_prior(coloured_tree, tree_priors)
-ceg <- create_ceg(staged_tree, view_table = TRUE)
+priors <- specify_priors(
+  st,
+  prior_type = "Uniform"
+)
 
+st_priors <- compute_staged_tree_priors(
+  st,
+  priors
+)
 
-# Define node groups and colours
-node_groups <- list(c("s1", "s2"), c("s3", "s4"))
-colours <- c("#BBA0CA", "#8AC6D0")
+ceg_model1 <- compute_ceg(st_priors)
 
-# Apply colours to the event tree
-custom_tree <- update_node_colours(event_tree, node_groups, colours)
-custom_coloured_tree <- ahc_colouring(custom_tree)
+priors2 <- specify_priors(
+  st,
+  prior_type = "Phantom"
+)
 
-# Cannot run this whole chunk at once as specify_priors needs user input
-custom_tree_priors <- specify_priors(custom_coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-custom_staged_tree <- staged_tree_prior(custom_coloured_tree, custom_tree_priors)
-ceg2 <- create_ceg(custom_staged_tree, view_table = TRUE)
-model1_summary <- summary(ceg)
-model2_summary <- summary(ceg2)
-compare_ceg_models(model1_summary, model2_summary)
+st_priors2 <- compute_staged_tree_priors(
+  st,
+  priors2
+)
 
+ceg_model2 <- compute_ceg(st_priors2)
 
+comparison <- compare_ceg_models(
+  ceg_model1,
+  ceg_model2
+)
+
+print(comparison)
+summary(comparison)
+}
+
+}
+\seealso{
+\code{\link{summary.compare_ceg_models}}
 }

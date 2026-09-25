@@ -2,46 +2,82 @@
 % Please edit documentation in R/map_plotting.R
 \name{generate_CEG_map}
 \alias{generate_CEG_map}
-\title{Generate a Leaflet Map for a Chain Event Graph (CEG)}
+\title{Generate a Chain Event Graph Probability Map}
 \usage{
 generate_CEG_map(
   shapefile,
   ceg_object,
-  conditionals = unique(ceg_object$x$edges$label1),
+  conditionals = unique(ceg_object$edges$label1),
   colour_by = NULL,
   color_palette = "viridis"
 )
 }
 \arguments{
-\item{shapefile}{A Simple Features (sf) object representing the shapefile data for the geographical areas.}
+\item{shapefile}{An \code{sf} object containing polygon geometries.}
 
-\item{ceg_object}{A list containing the Chain Event Graph (CEG) data, including nodes and edges.}
+\item{ceg_object}{An object of class \code{"ceg"}.}
 
-\item{conditionals}{A character vector containing the conditions (labels) to condition on when calculating
-area probabilities. Default is the unique edge labels from the \code{ceg_object}.}
+\item{conditionals}{Character vector specifying the conditioning variables.
+By default all unique edge labels are used.}
 
-\item{colour_by}{A string specifying the label by which to color the map. Default is \code{NULL}, which colors by
-the label with the maximum level.}
+\item{colour_by}{Character string specifying the outcome label whose
+conditional probability should be visualised. If \code{NULL}, the first
+label appearing at the deepest level of the CEG is used.}
 
-\item{color_palette}{A string specifying the color palette to use for the map. Default is "viridis".}
+\item{color_palette}{Character string specifying the viridis palette option.}
 }
 \value{
-A Leaflet map object with color-coded polygons representing the areas, with a legend indicating
-the probability values for each area.
+An object of class \code{"ceg_map"} containing:
+\itemize{
+\item \code{map}: leaflet map object.
+\item \code{conditional_probabilities}: probability table.
+\item \code{colour_by}: outcome used for colouring.
+\item \code{conditionals}: conditioning variables.
+\item \code{excluded_polygons}: polygons not present in the CEG.
+}
 }
 \description{
-This function generates an interactive map using the Leaflet package to visualize the probability of each
-area in the Chain Event Graph (CEG). The map is color-coded based on area-specific probabilities, which
-are calculated from the path products and conditional probabilities.
+Creates an interactive leaflet map displaying area-level probabilities
+derived from a Chain Event Graph (CEG).
+}
+\details{
+Conditional probabilities are calculated for each geographical region and
+displayed using a colour scale. Areas that do not appear in the CEG are
+reported separately and excluded from colouring.
+
+The function:
+\enumerate{
+\item Calculates all root-to-leaf path probabilities.
+\item Computes conditional probabilities for each geographical region.
+\item Joins probabilities to the supplied shapefile.
+\item Creates an interactive leaflet map with colour-coded polygons.
+}
 }
 \examples{
-data <- homicides
-event_tree <- create_event_tree(data, columns = c(9,2,4,5), "both")
-coloured_tree <- ahc_colouring(event_tree)
+et <- create_event_tree(homicides, c(9,1:3))
+st <- ahc_colouring(et)
 
-tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-staged_tree <- staged_tree_prior(coloured_tree, tree_priors)
-ceg <- create_ceg(staged_tree, view_table = TRUE)
-generate_CEG_map(bcu_shapefile, ceg)
+priors <- specify_priors(
+  st,
+  prior_type = "Uniform"
+)
 
+st_priors <- compute_staged_tree_priors(
+  st,
+  priors
+)
+
+ceg <- compute_ceg(st_priors)
+
+map_obj <- generate_CEG_map(
+  shapefile = bcu_shapefile,
+  ceg_object = ceg,
+  colour_by = "Female"
+)
+
+
+}
+\seealso{
+\code{\link{plot.ceg_map}},
+\code{\link{summary.ceg_map}}
 }

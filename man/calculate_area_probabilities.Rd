@@ -2,7 +2,7 @@
 % Please edit documentation in R/map_plotting.R
 \name{calculate_area_probabilities}
 \alias{calculate_area_probabilities}
-\title{Calculate Area Probabilities in a Chain Event Graph (CEG)}
+\title{Calculate Area-Specific Conditional Probabilities}
 \usage{
 calculate_area_probabilities(
   path_df,
@@ -13,23 +13,59 @@ calculate_area_probabilities(
 )
 }
 \arguments{
-\item{path_df}{A data frame containing paths and their corresponding products,
-as returned by the \code{calculate_path_products} function.}
+\item{path_df}{Output from \code{\link{calculate_path_products}}.}
 
-\item{unique_values}{A character vector containing the unique values (e.g., labels or categories)
-to condition on.}
+\item{unique_values}{Character vector of conditioning values.}
 
-\item{selected_indices}{A numeric vector of indices corresponding to the groupings of the unique values.}
+\item{selected_indices}{Numeric vector indicating grouping structure for the
+conditioning values.}
 
-\item{last_group}{A string representing the last group for which the conditional probability is to be calculated.}
+\item{last_group}{Character string specifying the outcome of interest.}
 
-\item{shapefile_vals}{A vector of area names (or other geographical identifiers) from the shapefile data.}
+\item{shapefile_vals}{Character vector containing area identifiers.}
 }
 \value{
-A list with area names as keys and their respective conditional probabilities as values.
-If no paths are found for a specific area, the probability is returned as \code{NA}.
+A named list of conditional probabilities indexed by area.
 }
 \description{
-This function calculates the conditional probability of a given last group for each area, based on the
-path products and area-specific paths. It leverages the \code{calculate_conditional_prob} function for each area.
+Calculates a conditional probability for each geographical area represented
+within a Chain Event Graph.
+}
+\details{
+The function evaluates a specified conditional probability separately for
+each area and returns the resulting probabilities as a named list.
+}
+\examples{
+et <- create_event_tree(homicides, c(9,1:3))
+st <- ahc_colouring(et)
+
+priors <- specify_priors(
+  st,
+  prior_type = "Uniform"
+)
+
+st_priors <- compute_staged_tree_priors(
+  st,
+  priors
+)
+
+ceg <- compute_ceg(st_priors)
+
+path_df <- calculate_path_products(
+  ceg$nodes,
+  ceg$edges
+)
+
+probs <- calculate_area_probabilities(
+  path_df,
+  unique_values = c("Adult"),
+  selected_indices = c(2),
+  last_group = "Female",
+  shapefile_vals = c("West", "South East")
+)
+
+
+}
+\seealso{
+\code{\link{calculate_conditional_prob}}
 }

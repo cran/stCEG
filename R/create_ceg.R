@@ -1,195 +1,210 @@
-#' Create a Chain Event Graph (CEG)
+#' Compute a Chain Event Graph (CEG)
 #'
-#' This function generates a Chain Event Graph (CEG) from a staged tree object and a prior table.
-#' It allows for node contraction and mapping, adjusts edge and node attributes,
-#' and visualizes the graph with specific customisations for labels, colour, and node arrangement.
+#' Constructs a Chain Event Graph (CEG) from a
+#' \code{"staged_tree_priors"} object by contracting situations that share
+#' equivalent future developments. The resulting graph contains contracted
+#' vertices, aggregated edge information, posterior and prior summaries, and
+#' a stage-level summary table.
 #'
-#' @param staged_tree_obj A staged tree object containing nodes and edges. It should have the following structure:
-#' \itemize{
-#'   \item `staged_tree_obj$x$nodes` : A data frame of node attributes with columns such as `id`, `level`, `colour`, `label`, etc.
-#'   \item `staged_tree_obj$x$edges` : A data frame of edge attributes with columns such as `from`, `to`, `label1`, `label2`, `label3`, etc.
+#' During construction, nodes with equivalent stage colours and downstream
+#' structures are recursively merged to form the final CEG representation.
+#' Edge counts, prior values, posterior values, and corresponding probability
+#' summaries are aggregated across contracted situations.
+#'
+#' @param staged_tree_priors An object of class
+#'   \code{"staged_tree_priors"} created by
+#'   \code{\link{compute_staged_tree_priors}}.
+#'
+#' @details
+#' The procedure:
+#' \enumerate{
+#'   \item Assigns contraction identifiers to nodes based on stage colours and
+#'   downstream structure.
+#'   \item Contracts equivalent situations into CEG vertices.
+#'   \item Aggregates edge counts, prior information and posterior information.
+#'   \item Calculates prior and posterior transition probabilities for each
+#'   stage.
+#'   \item Creates a stage-level summary table suitable for downstream model
+#'   inspection and comparison.
 #' }
-#' @param level_separation Numeric. The level separation value for hierarchical layout in the visualised graph. Default is 1200.
-#' @param node_distance Numeric. The node distance value for hierarchical layout in the visualised graph. Default is 400.
-#' @param label A character string specifying the type of label to display on edges. Options include:
-#'   - `"prior"`: Uses posterior label information.
-#'   - `"prior_mean"`: Uses posterior label information.
-#'   - `"posterior"`: Uses posterior label information.
-#'   - `"posterior_mean"`: Uses posterior mean label information.
-#'   - `"none"`: No labels on edges.
-#'   Default is `"posterior_mean"`.
-#' @param view_table Logical. Whether to display the summary table of the aggregated CEG data in the console. Default is `FALSE`.
 #'
-#' @return A `visNetwork` object representing the Chain Event Graph, including contracted nodes and updated edges.If view_table = TRUE, a coloured table is returned that can be displayed in the viewer, instead of just an update_table which can be viewed in the console.
-#'
-#' @details This function processes the staged tree and prior table, contracts nodes based on connected nodes,
-#' creates aggregated edge summaries, computes posterior and prior mean values, and visualizes the CEG
-#' with hierarchical layout, customizable labels, and node distance adjustments.
-#'
-#' The function also provides detailed printing of updated edges and contracted nodes for debugging purposes.
-#'
-#' @import stringr
-#' @import DT
-#' @import htmltools
-#' @import visNetwork
-#' @importFrom purrr pmap map_chr
+#' @return
+#' An object of class \code{"ceg"} containing:
+#' \itemize{
+#'   \item \code{nodes}: contracted CEG vertices.
+#'   \item \code{edges}: aggregated transition edges with counts, priors,
+#'   posteriors and probability summaries.
+#'   \item \code{table}: stage-level summary table containing data, prior,
+#'   posterior and probability information.
+#' }
 #'
 #' @examples
-#' data <- homicides
-#' event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-#' coloured_tree <- ahc_colouring(event_tree)
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
 #'
-#' # Cannot run this whole chunk at once as specify_priors needs user input
-#' tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-#' staged_tree <- staged_tree_prior(coloured_tree, tree_priors)
-#' ceg <- create_ceg(staged_tree, view_table = TRUE)
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
 #'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' print(ceg)
+#' summary(ceg)
+#'
+#' @seealso
+#' \code{\link{plot.ceg}},
+#' \code{\link{summary.ceg}}
 #'
 #' @export
-#'
-create_ceg <- function(staged_tree_obj, level_separation = 1200, node_distance = 400, label = "posterior", view_table = FALSE) {
-  nodes <- staged_tree_obj$stagedtreewithpriors$x$nodes
-  edges <- staged_tree_obj$stagedtreewithpriors$x$edges
-  nodes$size = 400
+compute_ceg <- function(staged_tree_priors) {
 
-  # Initialize contract IDs
+  if (!inherits(staged_tree_priors, "staged_tree_priors")) {
+    stop("Input must be an object of class 'staged_tree_priors'.")
+  }
+
+  nodes <- staged_tree_priors$nodes
+  edges <- staged_tree_priors$edges
+  prior_table <- staged_tree_priors$prior_table$table
+  #print(prior_table)
+
+  ## 1. Initialise contract IDs ---------------------------------------------
+
   nodes$contract_id <- paste0(nodes$level2, "-", nodes$color)
 
-  # Function to update contract IDs by appending connected nodes' contract IDs
   update_contract_ids <- function(nodes, edges) {
-    # Contract nodes at levels 1 and 5 separately
-    nodes$contract_id[nodes$level2 == 1] <- "1-#FFFFFF"
-    nodes$contract_id[nodes$level2 == max(nodes$level2)] <- paste0(max(nodes$level2), "-#FFFFFF")
 
-    for (level2 in sort(unique(nodes$level2), decreasing = TRUE)) {
-      if (level2 == 1 || level2 == max(nodes$level2)) next
+    nodes$contract_id[nodes$level2 == min(nodes$level2, na.rm = TRUE)] <-
+      paste0(min(nodes$level2, na.rm = TRUE), "-#FFFFFF")
 
-      current_level_nodes <- nodes[nodes$level2 == level2, ]
+    nodes$contract_id[nodes$level2 == max(nodes$level2, na.rm = TRUE)] <-
+      paste0(max(nodes$level2, na.rm = TRUE), "-#FFFFFF")
 
-      for (i in 1:nrow(current_level_nodes)) {
-        node <- current_level_nodes[i, ]
-        connected_edges <- edges[edges$from == node$id | edges$to == node$id, ]
+    for (lvl in sort(unique(nodes$level2), decreasing = TRUE)) {
 
-        connected_nodes <- unique(c(connected_edges$from, connected_edges$to))
-        connected_nodes <- connected_nodes[connected_nodes != node$id]
+      if (lvl %in% c(min(nodes$level2, na.rm = TRUE),
+                     max(nodes$level2, na.rm = TRUE))) next
 
-        if (length(connected_nodes) > 0) {
-          connected_contract_ids <- nodes$contract_id[nodes$id %in% connected_nodes]
-          connected_levels <- nodes$level[nodes$id %in% connected_nodes]
-          higher_or_same_level_ids <- connected_contract_ids[connected_levels >= node$level2]
-          nodes$contract_id[nodes$id == node$id] <- paste0(nodes$contract_id[nodes$id == node$id], "-", paste(higher_or_same_level_ids, collapse = "-"))
+      current <- nodes[nodes$level2 == lvl, ]
+
+      for (i in seq_len(nrow(current))) {
+
+        node <- current[i, ]
+        ce <- edges[edges$from == node$id | edges$to == node$id, ]
+        cn <- unique(c(ce$from, ce$to))
+        cn <- cn[cn != node$id]
+
+        if (length(cn) > 0) {
+          cid <- nodes$contract_id[nodes$id %in% cn]
+          clvl <- nodes$level2[nodes$id %in% cn]
+          higher <- cid[clvl >= node$level2]
+          nodes$contract_id[nodes$id == node$id] <-
+            paste0(nodes$contract_id[nodes$id == node$id],
+                   "-", paste(higher, collapse = "-"))
         }
       }
     }
-    return(nodes)
+
+    nodes
   }
 
-  # Apply contract IDs update
   nodes <- update_contract_ids(nodes, edges)
 
+  ## 2. Contracted nodes -----------------------------------------------------
 
-  # Contracted nodes aggregation
-  contracted_nodes <- nodes %>%
-    group_by(contract_id) %>%
-    summarise(
-      ids = paste(id, collapse = ", "),
-      label = first(label),
-      level = first(level2),
-      color = first(color),
-      #prior_variance = first(priorvariance),
-      .groups = 'drop'
+  contracted_nodes <- nodes |>
+    dplyr::group_by(contract_id) |>
+    dplyr::summarise(
+      ids   = paste(id, collapse = ", "),
+      label = dplyr::first(label),
+      level = dplyr::first(level2),
+      color = dplyr::first(color),
+      .groups = "drop"
     )
 
+  contracted_nodes <- contracted_nodes[
+    order(as.numeric(gsub("[^0-9]", "", contracted_nodes$label))), ]
 
-  # Sort contracted nodes by labels numerically
-  contracted_nodes <- contracted_nodes[order(as.numeric(gsub("[^0-9]", "", contracted_nodes$label))), ]
-
-  # Reassign labels sequentially from w0 to w(n-1) and set the last label as w∞
-  num_nodes <- nrow(contracted_nodes)
-  contracted_nodes$label <- paste0("w", 0:(num_nodes - 1))
-  contracted_nodes$label[num_nodes] <- paste0("w", "\u221E")  # Unicode for ∞
+  n_nodes <- nrow(contracted_nodes)
+  contracted_nodes$label <- paste0("w", 0:(n_nodes - 1))
+  contracted_nodes$label[n_nodes] <- paste0("w", "\u221E")
   contracted_nodes$id <- contracted_nodes$label
   contracted_nodes$font <- "80px"
   contracted_nodes$size <- 100
 
+  ## 3. Map original IDs to contracted IDs ----------------------------------
 
-  # Mapping individual node IDs to contracted node IDs
-  id_mapping <- lapply(1:nrow(contracted_nodes), function(i) {
-    # Split the ids string into individual ids
+  id_mapping <- lapply(seq_len(nrow(contracted_nodes)), function(i) {
     ids <- unlist(strsplit(contracted_nodes$ids[i], ",\\s*"))
-    ids <- trimws(ids)  # Remove any extra spaces
-    # Create a named vector where each id is mapped to the corresponding label
-    setNames(rep(contracted_nodes$label[i], length(ids)), ids)
+    ids <- trimws(ids)
+    stats::setNames(rep(contracted_nodes$label[i], length(ids)), ids)
   })
 
-  # Flatten the list into a single vector
   id_mapping <- unlist(id_mapping, use.names = TRUE)
 
-  #print("contracted_nodes")
-  #print(contracted_nodes)
-
-  # Copy edges and replace IDs with contracted IDs
   updated_edges <- edges
   updated_edges$from <- id_mapping[as.character(updated_edges$from)]
-  updated_edges$to <- id_mapping[as.character(updated_edges$to)]
+  updated_edges$to   <- id_mapping[as.character(updated_edges$to)]
 
-  # Print the updated edges
-  #print("Updated Edges with Contracted Node Labels:")
+  updated_edges <- updated_edges |>
+    dplyr::select(-color) |>
+    dplyr::left_join(
+      contracted_nodes |>
+        dplyr::select(id, color),
+      by = c("from" = "id")
+    ) |>
+    dplyr::rename(colour_from = color)
+
+
   #print(updated_edges)
+  #print("___________________")
+  ## 4. Merge and summarise edges -------------------------------------------
 
-  updated_edges <- updated_edges %>%
-    select(-color) %>%
-    left_join(contracted_nodes %>% select(id, color), by = c("from" = "id")) %>%  # Drop the existing 'colour' column from edges
-    rename(colour_from = color)
-  # Check the column names of updated_edges to ensure 'colour' is the correct name
-  #print(colnames(updated_edges))
-
-#print(updated_edges)
-
-  # Merge and summarize edges
-  merged_edges <- updated_edges %>%
-    group_by(from, to, label1, colour_from) %>%
-    summarise(
-      sumlabel2 = sum(label2),
-      sumlabel3 = sum(as.numeric(label3)),
-      total = (sumlabel2 + sumlabel3),
-      label_individuals = paste(first(label1), "\n", (sumlabel2 + sumlabel3)),
-      font.size = first(font.size),
-      colour_from = first(colour_from),
-      .groups = 'drop'
+  merged_edges <- updated_edges |>
+    dplyr::group_by(from, to, label1, colour_from) |>
+    dplyr::summarise(
+      sumlabel2 = sum(label2, na.rm = TRUE),
+      sumlabel3 = sum(as.numeric(label3), na.rm = TRUE),
+      total     = sumlabel2 + sumlabel3,
+      label_individuals = paste(dplyr::first(label1), "\n", total),
+      font.size = "80px",
+      colour_from = dplyr::first(colour_from),
+      .groups = "drop"
     )
 
-  #print(merged_edges)
+  merged_edges <- merged_edges |>
+    dplyr::group_by(colour_from) |>
+    dplyr::mutate(stage_total_posterior = sum(total, na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::group_by(colour_from, label1) |>
+    dplyr::mutate(posterior_total = sum(total, na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::group_by(colour_from) |>
+    dplyr::mutate(stage_total_prior = sum(sumlabel3, na.rm = TRUE)) |>
+    dplyr::ungroup() |>
+    dplyr::group_by(colour_from, label1) |>
+    dplyr::mutate(prior_total = sum(sumlabel3, na.rm = TRUE)) |>
+    dplyr::ungroup()
 
-  merged_edges <- merged_edges %>%
-    group_by(colour_from) %>%
-    mutate(stage_total_posterior = sum(total, na.rm = TRUE)) %>%
-    ungroup()
+  merged_edges$prior_mean <- round(
+    merged_edges$prior_total / merged_edges$stage_total_prior, 3
+  )
 
+  merged_edges$posterior_mean <- round(
+    merged_edges$posterior_total / merged_edges$stage_total_posterior, 3
+  )
 
-  merged_edges <- merged_edges %>%
-    group_by(colour_from, label1) %>%
-    mutate(posterior_total = sum(total, na.rm = TRUE)) %>%
-    ungroup()
-
-  merged_edges <- merged_edges %>%
-    group_by(colour_from) %>%
-    mutate(stage_total_prior = sum(sumlabel3, na.rm = TRUE)) %>%
-    ungroup()
-
-  merged_edges <- merged_edges %>%
-    group_by(colour_from, label1) %>%
-    mutate(prior_total = sum(sumlabel3, na.rm = TRUE)) %>%
-    ungroup()
-
-
-
-  merged_edges$prior_mean <- round(merged_edges$prior_total/merged_edges$stage_total_prior,3)
-
-  merged_edges$posterior_mean <- round(merged_edges$posterior_total/merged_edges$stage_total_posterior,3)
-  merged_edges$label_posterior = paste(merged_edges$label1, "\n", merged_edges$posterior_mean)
-  merged_edges$label_prior_mean = paste(merged_edges$label1, "\n", merged_edges$prior_mean)
-  merged_edges$label_prior = paste(merged_edges$label1, "\n", merged_edges$prior_total)
+  merged_edges$label_posterior   <- paste(merged_edges$label1, "\n",
+                                          merged_edges$posterior_mean)
+  merged_edges$label_prior_mean  <- paste(merged_edges$label1, "\n",
+                                          merged_edges$prior_mean)
+  merged_edges$label_prior       <- paste(merged_edges$label1, "\n",
+                                          merged_edges$prior_total)
   merged_edges$color <- "#000000"
 
   curvature_values <- merged_edges %>%
@@ -203,129 +218,223 @@ create_ceg <- function(staged_tree_obj, level_separation = 1200, node_distance =
     list(enabled = TRUE, type = "curvedCW", roundness = curvature)
   })
 
-
-  merged_edges <- merged_edges %>%
-    left_join(contracted_nodes %>% select(label, level), by = c("from" = "label"))
-
-  # Return the contracted nodes and edges
-
-  #print(contracted_nodes)
   #print(merged_edges)
 
-  if (label == "posterior") {
-    merged_edges$label <- merged_edges$label_individuals  # Assign "names" (label1)
-  } else if (label == "posterior_mean") {
-    merged_edges$label <-  merged_edges$label_posterior  # Assign "priors" (label_prior_frac)
-  } else if (label == "none") {
-    merged_edges$label <-  merged_edges$label1  # Assign "priors" (label_prior_frac)
-  } else if (label == "prior_mean") {
-    merged_edges$label <-  merged_edges$label_prior_mean # Assign "priors" (label_prior_frac)
-  } else if (label == "prior") {
-    merged_edges$label <-  merged_edges$label_prior # Assign "priors" (label_prior_frac)
-  }
+  merged_edges <- merged_edges |>
+    dplyr::left_join(
+      contracted_nodes |>
+        dplyr::select(label, level),
+      by = c("from" = "label")
+    )
 
-  aggregated_df <- merged_edges %>%
-    group_by(colour_from, level, label1) %>%
-    summarise(
-      data = sum(sumlabel2, na.rm = TRUE),
-      prior = sum(sumlabel3, na.rm = TRUE),
+  #print(merged_edges)
+  ## 5. Aggregated stage-level table ----------------------------------------
+
+  aggregated_df <- merged_edges |>
+    dplyr::group_by(colour_from, level, label1) |>
+    dplyr::summarise(
+      data      = sum(sumlabel2, na.rm = TRUE),
+      prior     = sum(sumlabel3, na.rm = TRUE),
       posterior = sum(total, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    arrange(level, label1)
+      .groups   = "drop"
+    ) |>
+    dplyr::arrange(level, label1)
 
-  aggregated_df <- aggregated_df %>%
-    group_by(colour_from, level) %>%
-    summarise(
-      data = paste(data, collapse = ","),
-      prior = paste(prior, collapse = ","),
+  aggregated_df <- aggregated_df |>
+    dplyr::group_by(colour_from, level) |>
+    dplyr::summarise(
+      data      = paste(data, collapse = ","),
+      prior     = paste(prior, collapse = ","),
       posterior = paste(posterior, collapse = ","),
-      prior_mean = paste(round(as.numeric(unlist(strsplit(prior, ","))) /
-                                 sum(as.numeric(unlist(strsplit(prior, ",")))), 3), collapse = ","),
-      posterior_mean = paste(round(as.numeric(unlist(strsplit(posterior, ","))) /
-                                     sum(as.numeric(unlist(strsplit(posterior, ",")))), 3), collapse = ","),
+      prior_mean = paste(
+        round(
+          as.numeric(unlist(strsplit(prior, ","))) /
+            sum(as.numeric(unlist(strsplit(prior, ",")))), 3
+        ),
+        collapse = ","
+      ),
+      posterior_mean = paste(
+        round(
+          as.numeric(unlist(strsplit(posterior, ","))) /
+            sum(as.numeric(unlist(strsplit(posterior, ",")))), 3
+        ),
+        collapse = ","
+      ),
       .groups = "drop"
-    ) %>%
-    arrange(level)
+    ) |>
+    dplyr::arrange(level)
 
-  #print(colnames(aggregated_df))
 
   contracted_nodes <- contracted_nodes %>%
     mutate(fixed = list(list(x = TRUE, y = FALSE)))
+  ## 6. Merge with prior_table ----------------------------------------------
 
-  # Rename the columns in prior_table to match aggregated_df
-  prior_table <- staged_tree_obj$priortable %>%
-    rename(colour_from = Colour)
+  prior_table2 <- prior_table |>
+    dplyr::rename(colour_from = Colour, level = Level)
 
-  prior_table <- prior_table %>%
-    rename(level = Level)
 
-  # Perform the left join
-  merged_table <- prior_table %>%
-    left_join(aggregated_df, by = c("colour_from", "level")) %>%
-    select(Stage, colour_from, level, data, prior, prior_mean, posterior, posterior_mean) %>%
-    mutate(
-      across(c(prior, posterior), ~ map_chr(.x, ~ {
-        values <- as.numeric(unlist(strsplit(.x, ",")))  # Convert string to numeric vector
-        if (any(abs(values %% 1 - 0.999) < 1e-6 | abs(values %% 1 - 0.001) < 1e-6)) {
-          values <- round(values)  # Round if any number ends in .999 or .001
+  merged_table <- prior_table2 |>
+    dplyr::left_join(aggregated_df, by = c("colour_from", "level")) |>
+    dplyr::select(
+      Stage, colour_from, level,
+      data, prior, prior_mean,
+      posterior, posterior_mean, Prior_Type
+    ) |>
+    dplyr::mutate(
+      dplyr::across(c(prior, posterior), ~ purrr::map_chr(.x, function(s) {
+        vals <- as.numeric(unlist(strsplit(s, ",")))
+        if (any(abs(vals %% 1 - 0.999) < 1e-6 | abs(vals %% 1 - 0.001) < 1e-6)) {
+          vals <- round(vals)
         }
-        paste(values, collapse = ",")  # Rejoin into a string
+        paste(vals, collapse = ",")
       }))
-    ) %>% rename(
-      Stage = Stage,
-      Colour = colour_from,
-      Level = level,
-      Data = data,
-      Prior = prior,
-      `Prior Mean` = prior_mean,
-      Posterior = posterior,
-      `Posterior Mean` = posterior_mean
+    ) |>
+    dplyr::rename(
+      Colour          = colour_from,
+      Level           = level,
+      Data            = data,
+      Prior           = prior,
+      Prior_Mean    = prior_mean,
+      Posterior       = posterior,
+      Posterior_Mean = posterior_mean
     )
 
-  #print("mergedtable")
-  #print(merged_table)
-
-  #  for (col in merged_table$Colour) {
-  #    styled_text <- make_style(col, bg = TRUE)
-  #    cat(styled_text(paste(col)), "\n")
-  #  }
-
-  # Ensure 'Colour' is a character vector
   merged_table$Colour <- as.character(merged_table$Colour)
 
-  # Count number of unique stages
-  num_stages <- length(unique(merged_table$Stage))
+  ## 7. Return CEG object ----------------------------------------------------
 
-  # Create the datatable with styling
-  UpdateTable <- DT::datatable(
-    merged_table,
-    escape = FALSE,
-    class = 'stripe hover row-border compact',  # modern minimal style
-    options = list(
-      pageLength = num_stages,
-      dom = 't<"bottom"i>',  # modern layout: table body, then info and pagination at bottom
-      columnDefs = list(
-        list(targets = which(names(merged_table) == "Colour"), visible = FALSE)
-      ),
-      initComplete = JS(  # modern header styling
-        "function(settings, json) {",
-        "$(this.api().table().header()).css({'background-color': '#f9f9f9', 'color': '#333', 'font-family': 'Segoe UI, sans-serif', 'font-size': '14px'});",
-        "}"
-      )
-    )
-  ) %>%
-    formatStyle(
-      'Stage',
-      backgroundColor = styleEqual(merged_table$Stage, merged_table$Colour),
-      fontFamily = 'Segoe UI, sans-serif',
-      fontSize = '13px',
-      color = 'black',
-      fontWeight = '500',
-      padding = '6px'
-    )
+  structure(
+    list(
+      nodes = contracted_nodes,
+      edges = merged_edges,
+      table = merged_table
+    ),
+    class = "ceg"
+  )
+}
 
-  ChainEventGraph <- visNetwork(nodes = contracted_nodes, edges = merged_edges) %>%
+#' Plot a Chain Event Graph
+#'
+#' Produces an interactive visualisation of a Chain Event Graph (CEG) using
+#' \pkg{visNetwork}. Edge labels can display observed counts, prior values,
+#' posterior values, prior probabilities, or posterior probabilities.
+#'
+#' Selecting a node highlights incoming and outgoing edges, allowing local
+#' graph structure to be explored interactively.
+#'
+#' @param x An object of class \code{"ceg"}.
+#' @param label Character string specifying the edge label type to display.
+#'   One of:
+#'   \itemize{
+#'     \item \code{"posterior_mean"} (default)
+#'     \item \code{"posterior"}
+#'     \item \code{"prior_mean"}
+#'     \item \code{"prior"}
+#'     \item any other value displays the original edge labels
+#'   }
+#' @param level_separation Numeric value controlling spacing between graph
+#'   levels. Default is \code{1200}.
+#' @param node_distance Numeric value controlling spacing between nodes.
+#'   Default is \code{400}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' A \pkg{visNetwork} htmlwidget representing the Chain Event Graph.
+#'
+#'
+#' @examples
+#' \dontrun{
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' plot(ceg)
+#'
+#' plot(
+#'   ceg,
+#'   label = "posterior_mean"
+#' )
+#'
+#' plot(
+#'   ceg,
+#'   label = "prior_mean"
+#' )
+#'
+#' plot(
+#'   ceg,
+#'   label = "posterior"
+#' )
+#' }
+#'
+#' @seealso
+#' \code{\link{compute_ceg}},
+#' \code{\link{summary.ceg}}
+#'
+#' @method plot ceg
+#' @export
+plot.ceg <- function(x,
+                     label = "posterior_mean",
+                     level_separation = 1200,
+                     node_distance = 400,
+                     ...) {
+
+  if (!inherits(x, "ceg")) {
+    stop("Object must be of class 'ceg'.")
+  }
+
+  nodes <- x$nodes
+  #print("nodes")
+  #print(nodes)
+  edges <- x$edges
+  #print("edges")
+  #print(edges)
+  edges$font.size <- 100
+  ## ----------------------------------------------------------------------
+  ## 1. Build tooltips (leaf nodes included)
+  ## ----------------------------------------------------------------------
+
+#  nodes$title <- ifelse(
+#    is.na(nodes$prior_Mean) | nodes$Prior_Mean == "",
+#    "Leaf nodes have no prior",
+#    paste0(
+#      "Prior: ", nodes$Prior, "<br>",
+#      "Prior Mean: ", nodes$Prior_Mean, "<br>",
+#      "Prior Variance: ", nodes$Prior_Variance
+#    )
+#  )
+
+  ## ----------------------------------------------------------------------
+  ## 2. Select edge label type
+  ## ----------------------------------------------------------------------
+
+  if (label == "posterior") {
+    edges$label <- edges$label_individuals
+  } else if (label == "posterior_mean") {
+    edges$label <- edges$label_posterior
+  } else if (label == "prior_mean") {
+    edges$label <- edges$label_prior_mean
+  } else if (label == "prior") {
+    edges$label <- edges$label_prior
+  } else {
+    edges$label <- edges$label1
+  }
+
+  ## ----------------------------------------------------------------------
+  ## 3. Build visNetwork plot
+  ## ----------------------------------------------------------------------
+
+  visNetwork::visNetwork(nodes = nodes, edges = edges) %>%
     visHierarchicalLayout(direction = "LR", levelSeparation = level_separation) %>%
     visNodes(scaling = list(min = 10, max = 10), font = list(vadjust = -170), fixed = TRUE) %>%
     visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 5)), smooth = TRUE) %>%
@@ -346,10 +455,6 @@ create_ceg <- function(staged_tree_obj, level_separation = 1200, node_distance =
       navigationButtons = TRUE
     ) %>%
     visPhysics(hierarchicalRepulsion = list(nodeDistance = node_distance), stabilization = TRUE) %>%
-    visEvents(
-      selectNode = "function(params) { /* Node selection code */ }",
-      deselectNode = "function(params) { /* Deselect code */ }"
-    ) %>%
     visEvents(
       selectNode = "function(params) {
         var selectedNodeIds = params.nodes; // Array of selected node IDs
@@ -414,147 +519,499 @@ create_ceg <- function(staged_tree_obj, level_separation = 1200, node_distance =
       }"
     )%>%
     visEvents(stabilizationIterationsDone = "function() { this.physics.options.enabled = false; }")
-
-  # Create the result list (with invisible filtereddf)
-  result <- merged_table
-
-  #print(contracted_nodes)
-  #print(merged_edges)
-
-  # Return both the network plot and the result
-
-
-  if (view_table) {
-    output <- list(ceg = ChainEventGraph, coloured_table = UpdateTable, update_table = result)
-  } else {
-    output <- list(ceg = ChainEventGraph, update_table = result)
-  }
-  class(output) <- "chain_event_graph"
-  return(output)
-
 }
 
-
-
-
-
-#' Compare Two Chain Event Graph Models Using Bayes Factors
+#' Summarise a Chain Event Graph
 #'
-#' This function compares two fitted Chain Event Graph (CEG) models by evaluating their total log marginal likelihoods and computing the Bayes factor.
-#' The comparison identifies the preferred model and reports the strength of evidence using Jeffreys' scale.
+#' Generates a concise summary of a Chain Event Graph including the number of
+#' contracted vertices, edges, stages, levels and available prior and posterior
+#' information.
 #'
-#' @param summary1 An object of class `summary.chain_event_graph`, typically the output of `summary()` applied to a fitted CEG model.
-#' @param summary2 Another object of class `summary.chain_event_graph` to compare with `summary1`.
+#' @param object An object of class \code{"ceg"}.
+#' @param ... Additional arguments passed to S3 methods.
 #'
-#' @return An invisible list of class `ceg_model_comparison` containing:
-#' \describe{
-#'   \item{log_marginal_1}{Log marginal likelihood of model 1.}
-#'   \item{log_marginal_2}{Log marginal likelihood of model 2.}
-#'   \item{log_Bayes_factor}{The log Bayes factor comparing model 1 to model 2.}
-#'   \item{Bayes_factor}{The Bayes factor (on the original scale).}
-#'   \item{preferred_model}{The model preferred based on the Bayes factor.}
-#' }
-#'
-#' @details
-#' The Bayes factor is calculated as the ratio of marginal likelihoods of the two models: \eqn{BF = \exp(\log BF)}.
-#' Interpretation of the Bayes factor is guided by Jeffreys' scale:
+#' @return
+#' An object of class \code{"summary_ceg"} containing:
 #' \itemize{
-#'   \item \strong{< 1:} Evidence against the alternative model
-#'   \item \strong{1–3:} Weak evidence
-#'   \item \strong{3–10:} Moderate evidence
-#'   \item \strong{10–30:} Strong evidence
-#'   \item \strong{30–100:} Very strong evidence
-#'   \item \strong{> 100:} Decisive evidence
+#'   \item Number of vertices.
+#'   \item Number of edges.
+#'   \item Graph levels.
+#'   \item Stage colours.
+#'   \item Stage identifiers.
+#'   \item Prior type information.
 #' }
-#'
-#' The function prints the log marginal likelihoods, log Bayes factor, Bayes factor, and preferred model.
 #'
 #' @examples
-#' data <- homicides
-#' event_tree <- create_event_tree(data, columns = c(1,2,4,5), "both")
-#' coloured_tree <- ahc_colouring(event_tree)
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
 #'
-#' tree_priors <- specify_priors(coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-#' staged_tree <- staged_tree_prior(coloured_tree, tree_priors)
-#' ceg <- create_ceg(staged_tree, view_table = TRUE)
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
 #'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
 #'
-#' # Define node groups and colours
-#' node_groups <- list(c("s1", "s2"), c("s3", "s4"))
-#' colours <- c("#BBA0CA", "#8AC6D0")
+#' ceg <- compute_ceg(st_priors)
 #'
-#' # Apply colours to the event tree
-#' custom_tree <- update_node_colours(event_tree, node_groups, colours)
-#' custom_coloured_tree <- ahc_colouring(custom_tree)
+#' summary(ceg)
 #'
-#' # Cannot run this whole chunk at once as specify_priors needs user input
-#' custom_tree_priors <- specify_priors(custom_coloured_tree, prior_type = "Uniform", ask_edit = FALSE)
-#' custom_staged_tree <- staged_tree_prior(custom_coloured_tree, custom_tree_priors)
-#' ceg2 <- create_ceg(custom_staged_tree, view_table = TRUE)
-#' model1_summary <- summary(ceg)
-#' model2_summary <- summary(ceg2)
-#' compare_ceg_models(model1_summary, model2_summary)
-#'
-#'
+#' @method summary ceg
 #' @export
-compare_ceg_models <- function(summary1, summary2) {
-  if (!inherits(summary1, "summary.chain_event_graph") ||
-      !inherits(summary2, "summary.chain_event_graph")) {
-    stop("Both inputs must be of class 'summary.chain_event_graph'.")
+summary.ceg <- function(object, ...) {
+
+  if (!inherits(object, "ceg")) {
+    stop("Object must be of class 'ceg'.")
   }
 
-  log_marginal_1 <- summary1$total_log_marginal_likelihood
-  log_marginal_2 <- summary2$total_log_marginal_likelihood
+  nodes <- object$nodes
+  edges <- object$edges
+  table <- object$table
+  #print(nodes)
+  #print("------")
+  #print(table)
 
-  log_BF <- log_marginal_1 - log_marginal_2
-  BF <- exp(log_BF)
-  preferred_model = ifelse(log_BF > 0, "Model 1", "Model 2")
-
-  result <- list(
-    log_marginal_1 = log_marginal_1,
-    log_marginal_2 = log_marginal_2,
-    log_Bayes_factor = log_BF,
-    Bayes_factor = BF,
-    preferred_model = ifelse(log_BF > 0, "Model 1", "Model 2")
+  out <- list(
+    n_nodes = nrow(nodes),
+    n_edges = nrow(edges),
+    levels = sort(unique(nodes$level)),
+    colours = unique(nodes$color),
+    stages = unique(table$Stage),
+    n_stages = length(unique(table$Stage)),
+    prior_types = unique(table$Prior_Type %||% NA),
+    has_prior_info = !all(is.na(table$Prior)),
+    has_posterior_info = !all(is.na(table$Posterior))
   )
 
+  class(out) <- "summary_ceg"
+  out
+}
+
+
+#' Print a Chain Event Graph
+#'
+#' Prints a concise overview of a Chain Event Graph including the number of
+#' vertices, edges and stages.
+#'
+#' @param x An object of class \code{"ceg"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' The supplied \code{"ceg"} object, invisibly.
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg <- compute_ceg(st_priors)
+#'
+#' print(ceg)
+#'
+#' @method print ceg
+#' @export
+print.ceg <- function(x, ...) {
+
+  if (!inherits(x, "ceg")) {
+    stop("Object must be of class 'ceg'.")
+  }
+
+  cat("Chain Event Graph\n")
+  cat("=================\n")
+
+  cat("Nodes:   ", nrow(x$nodes), "\n")
+  cat("Edges:   ", nrow(x$edges), "\n")
+  cat("Stages:  ", length(unique(x$table$Stage)), "\n\n")
+
+  cat("Use summary(x) for detailed information.\n")
+  cat("Use plot(x) to visualize the graph.\n")
+
+  invisible(x)
+}
+
+#' Compare Two Chain Event Graph Models
+#'
+#' Compares two fitted Chain Event Graph (CEG) models using their log marginal
+#' likelihoods and calculates the corresponding Bayes Factor.
+#'
+#' Evidence in favour of each model is quantified and classified according to
+#' Jeffreys' scale for Bayes Factors.
+#'
+#' @param ceg1 An object of class
+#'   \code{"ceg"}.
+#' @param ceg2 An object of class
+#'   \code{"ceg"}.
+#'
+#' @details
+#' The Bayes Factor is computed as:
+#'
+#' \deqn{
+#' BF = \exp(\log p(D \mid M_1) - \log p(D \mid M_2))
+#' }
+#'
+#' where \eqn{p(D \mid M)} denotes the marginal likelihood of a model.
+#'
+#' The resulting Bayes Factor is interpreted using Jeffreys' evidence scale.
+#'
+#' @return
+#' An object of class \code{"compare_ceg_models"} containing:
+#' \itemize{
+#'   \item Log marginal likelihoods for both models.
+#'   \item Log Bayes Factor.
+#'   \item Bayes Factor.
+#'   \item Preferred model.
+#'   \item Evidence measures for each model.
+#'   \item Jeffreys evidence category.
+#' }
+#'
+#' @examples
+#' \dontrun{
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg_model1 <- compute_ceg(st_priors)
+#'
+#' priors2 <- specify_priors(
+#'   st,
+#'   prior_type = "Phantom"
+#' )
+#'
+#' st_priors2 <- compute_staged_tree_priors(
+#'   st,
+#'   priors2
+#' )
+#'
+#' ceg_model2 <- compute_ceg(st_priors2)
+#'
+#' comparison <- compare_ceg_models(
+#'   ceg_model1,
+#'   ceg_model2
+#' )
+#'
+#' print(comparison)
+#' summary(comparison)
+#' }
+#'
+#' @seealso
+#' \code{\link{summary.compare_ceg_models}}
+#'
+#' @export
+compare_ceg_models <- function(ceg1, ceg2) {
+
+  # ------------------------------------------------------------
+  # Check that both inputs are chain event graph objects
+  # ------------------------------------------------------------
+
+  if (!inherits(ceg1, "ceg") ||
+      !inherits(ceg2, "ceg")) {
+    stop("Both inputs must be 'ceg' objects.")
+  }
+
+
+  # ------------------------------------------------------------
+  # Function to calculate log marginal likelihood
+  # and per-stage log scores
+  # ------------------------------------------------------------
+
+  calculate_log_scores <- function(ceg) {
+
+    if (is.null(ceg$table)) {
+      stop(
+        "The ceg object does not contain an update_table."
+      )
+    }
+
+    update_table <- ceg$table
+
+    total_score <- 0
+
+    stage_scores <- numeric(nrow(update_table))
+    effective_sample_sizes <- numeric(nrow(update_table))
+
+
+    # ----------------------------------------------------------
+    # Calculate score for each stage
+    # ----------------------------------------------------------
+
+    for (i in 1:nrow(update_table)) {
+
+      prior <- as.numeric(
+        unlist(strsplit(update_table$Prior[i], ","))
+      )
+
+      data <- as.numeric(
+        unlist(strsplit(update_table$Data[i], ","))
+      )
+
+
+      # Replace zero values
+      prior <- ifelse(prior == 0, 1e-10, prior)
+      data  <- ifelse(data == 0, 1e-10, data)
+
+
+      alpha_sum <- sum(prior)
+      x_sum <- sum(data)
+
+      posterior_sum <- alpha_sum + x_sum
+
+
+      # --------------------------------------------------------
+      # Log marginal likelihood for this stage
+      # --------------------------------------------------------
+
+      term1 <- lgamma(alpha_sum) -
+        lgamma(posterior_sum)
+
+      term2 <- sum(
+        lgamma(prior + data) -
+          lgamma(prior)
+      )
+
+      stage_score <- term1 + term2
+
+      stage_scores[i] <- stage_score
+
+      total_score <- total_score + stage_score
+
+
+      # --------------------------------------------------------
+      # Effective sample size
+      # --------------------------------------------------------
+
+      alpha_star <- prior + data
+
+      effective_sample_sizes[i] <- sum(alpha_star)
+    }
+
+
+    # ----------------------------------------------------------
+    # Per-stage results
+    # ----------------------------------------------------------
+
+    per_stage_scores <- data.frame(
+      Stage = update_table$Stage,
+      LogScore = round(stage_scores, 3),
+      ESS = round(effective_sample_sizes, 2),
+      stringsAsFactors = FALSE
+    )
+
+
+    # ----------------------------------------------------------
+    # Return results
+    # ----------------------------------------------------------
+
+    list(
+      total_log_marginal_likelihood = total_score,
+      per_stage_log_scores = per_stage_scores
+    )
+  }
+
+
+  # ============================================================
+  # CALCULATE SCORES FOR BOTH CEGs
+  # ============================================================
+
+  scores1 <- calculate_log_scores(ceg1)
+
+  scores2 <- calculate_log_scores(ceg2)
+
+
+  # ============================================================
+  # TOTAL LOG MARGINAL LIKELIHOOD
+  # ============================================================
+
+  log_marginal_1 <-
+    scores1$total_log_marginal_likelihood
+
+  log_marginal_2 <-
+    scores2$total_log_marginal_likelihood
+
+
+  # ============================================================
+  # BAYES FACTOR
+  # ============================================================
+
+  logBF <- log_marginal_1 - log_marginal_2
+
+  BF <- exp(logBF)
+
+
+  # ============================================================
+  # EVIDENCE MEASURES
+  # ============================================================
+
+  evidence_model1 <- if (logBF > 0) {
+    logBF
+  } else {
+    0
+  }
+
+  evidence_model2 <- if (logBF < 0) {
+    -logBF
+  } else {
+    0
+  }
+
+
+  # ============================================================
+  # JEFFREYS SCALE
+  # ============================================================
+
   jeffreys_scale <- function(BF) {
-    if (BF <= 0 || is.na(BF)) {
+
+    if (is.na(BF) || BF <= 0) {
       return("Invalid Bayes Factor")
-    }
 
-    evidence_strength <- function(x) {
-      if (x >= 1 & x < 3) {
-        return("Weak")
-      } else if (x >= 3 & x < 10) {
-        return("Moderate")
-      } else if (x >= 10 & x < 30) {
-        return("Strong")
-      } else if (x >= 30 & x < 100) {
-        return("Very strong")
-      } else {
-        return("Decisive")
-      }
-    }
+    } else if (BF < 1) {
+      return("Evidence against Model 1")
 
-    if (BF == 1) {
-      return("No evidence either way")
-    } else if (BF > 1) {
-      return(paste(evidence_strength(BF), "evidence for Model 2 over Model 1"))
+    } else if (BF < 3) {
+      return("Barely worth mentioning")
+
+    } else if (BF < 10) {
+      return("Substantial evidence")
+
+    } else if (BF < 30) {
+      return("Strong evidence")
+
+    } else if (BF < 100) {
+      return("Very strong evidence")
+
     } else {
-      return(paste(evidence_strength(1 / BF), "evidence for Model 1 over Model 2"))
+      return("Decisive evidence")
     }
   }
 
-  # Print the requested values
-  cat("Log marginal of model 1: ", round(log_marginal_1, 3), "\n")
-  cat("Log marginal of model 2: ", round(log_marginal_2, 3), "\n")
-  cat("Log Bayes factor of Model 1 vs Model 2: ", round(log_BF, 3), "\n")
-  #cat("Bayes factor of Model 1 vs Model 2: ", BF, "\n")
-  #cat("Jeffreys interpretation: ", jeffreys_scale(BF), "\n")
-  cat("Preferred Model:", preferred_model, "\n")
 
-  class(result) <- "ceg_model_comparison"
-  invisible(result)
+  # ============================================================
+  # CREATE OUTPUT
+  # ============================================================
+
+  out <- list(
+
+    log_marginal_1 = log_marginal_1,
+
+    log_marginal_2 = log_marginal_2,
+
+    log_scores_1 =
+      scores1$per_stage_log_scores,
+
+    log_scores_2 =
+      scores2$per_stage_log_scores,
+
+    log_Bayes_factor = logBF,
+
+    Bayes_factor = BF,
+
+    preferred_model =
+      ifelse(
+        logBF > 0,
+        "Model 1",
+        "Model 2"
+      ),
+
+    evidence_model1 = evidence_model1,
+
+    evidence_model2 = evidence_model2,
+
+    jeffreys_category =
+      jeffreys_scale(BF)
+  )
+
+
+  class(out) <- "compare_ceg_models"
+
+  return(out)
 }
+
+
+#' Summarise a CEG Model Comparison
+#'
+#' Produces a summary of a Bayes Factor comparison between two Chain Event
+#' Graph models.
+#'
+#' @param object An object of class \code{"compare_ceg_models"}.
+#' @param ... Additional arguments passed to S3 methods.
+#'
+#' @return
+#' An object of class \code{"summary_compare_ceg_models"} containing Bayes
+#' Factor statistics, preferred model information and evidence measures.
+#'
+#' @examples
+#' et <- create_event_tree(homicides, c(1:3))
+#' st <- ahc_colouring(et)
+#'
+#' priors <- specify_priors(
+#'   st,
+#'   prior_type = "Uniform"
+#' )
+#'
+#' st_priors <- compute_staged_tree_priors(
+#'   st,
+#'   priors
+#' )
+#'
+#' ceg_model1 <- compute_ceg(st_priors)
+#'
+#' priors2 <- specify_priors(
+#'   st,
+#'   prior_type = "Phantom"
+#' )
+#'
+#' st_priors2 <- compute_staged_tree_priors(
+#'   st,
+#'   priors2
+#' )
+#'
+#' ceg_model2 <- compute_ceg(st_priors2)
+#'
+#' comparison <- compare_ceg_models(
+#'   ceg_model1,
+#'   ceg_model2
+#' )
+#'
+#' summary(comparison)
+#'
+#' @method summary compare_ceg_models
+#' @export
+summary.compare_ceg_models <- function(object, ...) {
+
+  out <- list(
+    log_marginal_1   = object$log_marginal_1,
+    log_marginal_2   = object$log_marginal_2,
+    log_Bayes_factor = object$log_Bayes_factor,
+    Bayes_factor     = object$Bayes_factor,
+    preferred_model  = object$preferred_model,
+    evidence_model1  = object$evidence_model1,
+    evidence_model2  = object$evidence_model2,
+    jeffreys_category = object$jeffreys_category
+  )
+
+  class(out) <- "summary_compare_ceg_models"
+  out
+}
+
+
 
